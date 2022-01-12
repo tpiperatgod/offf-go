@@ -10,14 +10,14 @@ import (
 
 	ofctx "github.com/tpiperatgod/offf-go/context"
 	"github.com/tpiperatgod/offf-go/plugin"
-	plugin_a "github.com/tpiperatgod/offf-go/plugin/plugin-a"
+	plgExample "github.com/tpiperatgod/offf-go/plugin/plugin-example"
 	"github.com/tpiperatgod/offf-go/runtime"
 	"github.com/tpiperatgod/offf-go/runtime/async"
 	"github.com/tpiperatgod/offf-go/runtime/knative"
 )
 
 type functionsFrameworkImpl struct {
-	ofContext   ofctx.Context
+	funcContext ofctx.Context
 	prePlugins  []plugin.Plugin
 	postPlugins []plugin.Plugin
 	pluginMap   map[string]plugin.Plugin
@@ -55,17 +55,17 @@ func NewFramework() (*functionsFrameworkImpl, error) {
 
 func (fwk *functionsFrameworkImpl) Register(ctx context.Context, fn interface{}) error {
 	if fnHTTP, ok := fn.(func(http.ResponseWriter, *http.Request) error); ok {
-		if err := fwk.runtime.RegisterHTTPFunction(fwk.ofContext, fwk.processPreHooks, fwk.processPostHooks, fnHTTP); err != nil {
+		if err := fwk.runtime.RegisterHTTPFunction(fwk.funcContext, fwk.prePlugins, fwk.postPlugins, fnHTTP); err != nil {
 			klog.Errorf("failed to register function: %v", err)
 			return err
 		}
 	} else if fnOpenFunction, ok := fn.(func(ofctx.Context, []byte) (ofctx.Out, error)); ok {
-		if err := fwk.runtime.RegisterOpenFunction(fwk.ofContext, fwk.processPreHooks, fwk.processPostHooks, fnOpenFunction); err != nil {
+		if err := fwk.runtime.RegisterOpenFunction(fwk.funcContext, fwk.prePlugins, fwk.postPlugins, fnOpenFunction); err != nil {
 			klog.Errorf("failed to register function: %v", err)
 			return err
 		}
 	} else if fnCloudEvent, ok := fn.(func(context.Context, cloudevents.Event) error); ok {
-		if err := fwk.runtime.RegisterCloudEventFunction(ctx, fwk.ofContext, fwk.processPreHooks, fwk.processPostHooks, fnCloudEvent); err != nil {
+		if err := fwk.runtime.RegisterCloudEventFunction(ctx, fwk.funcContext, fwk.prePlugins, fwk.postPlugins, fnCloudEvent); err != nil {
 			klog.Errorf("failed to register function: %v", err)
 			return err
 		}
@@ -73,28 +73,6 @@ func (fwk *functionsFrameworkImpl) Register(ctx context.Context, fn interface{})
 		err := errors.New("unrecognized function")
 		klog.Errorf("failed to register function: %v", err)
 		return err
-	}
-	return nil
-}
-
-func (fwk *functionsFrameworkImpl) processPreHooks() error {
-	plugins := fwk.pluginMap
-	for _, plg := range fwk.prePlugins {
-		klog.Infof("exec pre hooks: %s of version %s", plg.Name(), plg.Version())
-		if err := plg.ExecPreHook(fwk.ofContext, plugins); err != nil {
-			klog.Warningf("failed to exec pre hooks %s: %s", plg.Name(), err.Error())
-		}
-	}
-	return nil
-}
-
-func (fwk *functionsFrameworkImpl) processPostHooks() error {
-	plugins := fwk.pluginMap
-	for _, plg := range fwk.postPlugins {
-		klog.Infof("exec post hooks: %s of version %s", plg.Name(), plg.Version())
-		if err := plg.ExecPostHook(fwk.ofContext, plugins); err != nil {
-			klog.Warningf("failed to exec post hooks %s: %s", plg.Name(), err.Error())
-		}
 	}
 	return nil
 }
@@ -111,7 +89,7 @@ func (fwk *functionsFrameworkImpl) Start(ctx context.Context) error {
 func (fwk *functionsFrameworkImpl) RegisterPlugins(customPlugins map[string]plugin.Plugin) {
 	// Register default plugins
 	fwk.pluginMap = map[string]plugin.Plugin{
-		plugin_a.Name: plugin_a.New(),
+		plgExample.Name: plgExample.New(),
 	}
 
 	// Register custom plugins
@@ -126,13 +104,13 @@ func (fwk *functionsFrameworkImpl) RegisterPlugins(customPlugins map[string]plug
 		}
 	}
 
-	for _, plgName := range fwk.ofContext.PrePlugins {
+	for _, plgName := range fwk.funcContext.PrePlugins {
 		if plg, ok := fwk.pluginMap[plgName]; ok {
 			fwk.prePlugins = append(fwk.prePlugins, plg)
 		}
 	}
 
-	for _, plgName := range fwk.ofContext.PostPlugins {
+	for _, plgName := range fwk.funcContext.PostPlugins {
 		if plg, ok := fwk.pluginMap[plgName]; ok {
 			fwk.postPlugins = append(fwk.postPlugins, plg)
 		}
@@ -142,9 +120,9 @@ func (fwk *functionsFrameworkImpl) RegisterPlugins(customPlugins map[string]plug
 func createRuntime(fwk *functionsFrameworkImpl) error {
 	var err error
 
-	rt := fwk.ofContext.Runtime
-	port := fwk.ofContext.Port
-	pattern := fwk.ofContext.HttpPattern
+	rt := fwk.funcContext.Runtime
+	port := fwk.funcContext.Port
+	pattern := fwk.funcContext.HttpPattern
 
 	switch rt {
 	case ofctx.Knative:
@@ -171,6 +149,6 @@ func parseOpenFunctionContext(fwk *functionsFrameworkImpl) error {
 	if err != nil {
 		return err
 	}
-	fwk.ofContext = *c
+	fwk.funcContext = *c
 	return nil
 }

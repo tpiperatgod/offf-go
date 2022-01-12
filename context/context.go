@@ -142,13 +142,13 @@ func (ctx *Context) OutputIsEmpty() bool {
 	return false
 }
 
-func (ctx *Context) ReturnWithSuccess() Out {
+func (ctx *Context) ReturnOnSuccess() Out {
 	return Out{
 		Code: Success,
 	}
 }
 
-func (ctx *Context) ReturnWithInternalError() Out {
+func (ctx *Context) ReturnOnInternalError() Out {
 	return Out{
 		Code: InternalError,
 	}

@@ -1,4 +1,4 @@
-package plugin_a
+package plugin_example
 
 import (
 	"context"
@@ -12,41 +12,45 @@ import (
 )
 
 const (
-	Name    = "plugin-a"
+	Name    = "plugin-example"
 	Version = "v1"
 )
 
-type PluginA struct {
+type PluginExample struct {
 	PluginName    string
 	PluginVersion string
 	stateA        int64
 	stateB        context.Context
 }
 
-var _ plugin.Plugin = &PluginA{}
+var _ plugin.Plugin = &PluginExample{}
 
-func New() *PluginA {
-	return &PluginA{}
+func New() *PluginExample {
+	return &PluginExample{}
 }
 
-func (p *PluginA) Name() string {
+func (p *PluginExample) Name() string {
 	return Name
 }
 
-func (p *PluginA) Version() string {
+func (p *PluginExample) Version() string {
 	return Version
 }
 
-func (p *PluginA) ExecPreHook(ctx ofctx.Context, plugins map[string]plugin.Plugin) error {
+func (p *PluginExample) Init() plugin.Plugin {
+	return New()
+}
+
+func (p *PluginExample) ExecPreHook(ctx ofctx.Context, plugins map[string]plugin.Plugin) error {
 	r := preHookLogic(ctx.Ctx)
 	p.stateA = 1
 	p.stateB = r
 	return nil
 }
 
-func (p *PluginA) ExecPostHook(ctx ofctx.Context, plugins map[string]plugin.Plugin) error {
+func (p *PluginExample) ExecPostHook(ctx ofctx.Context, plugins map[string]plugin.Plugin) error {
 	// Get data from another plugin via Plugin.Get()
-	plgName := "plugin-b"
+	plgName := "plugin-custom"
 	keyName := "StateC"
 	plg, ok := plugins[plgName]
 	if ok && plg != nil {
@@ -60,7 +64,7 @@ func (p *PluginA) ExecPostHook(ctx ofctx.Context, plugins map[string]plugin.Plug
 	return fmt.Errorf("failed to get %s from plugin %s", keyName, plgName)
 }
 
-func (p *PluginA) Get(fieldName string) (interface{}, bool) {
+func (p *PluginExample) Get(fieldName string) (interface{}, bool) {
 	plgMap := structs.Map(p)
 	value, ok := plgMap[fieldName]
 	return value, ok
