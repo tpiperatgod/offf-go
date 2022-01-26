@@ -2,7 +2,6 @@ package async
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,7 +41,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 }
 
 func (r *Runtime) RegisterHTTPFunction(
-	ctx ofctx.Context,
+	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
 	fn func(http.ResponseWriter, *http.Request) error,
@@ -52,7 +51,7 @@ func (r *Runtime) RegisterHTTPFunction(
 
 func (r *Runtime) RegisterCloudEventFunction(
 	ctx context.Context,
-	funcContext ofctx.Context,
+	funcContext ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
 	fn func(context.Context, cloudevents.Event) error,
@@ -61,40 +60,34 @@ func (r *Runtime) RegisterCloudEventFunction(
 }
 
 func (r *Runtime) RegisterOpenFunction(
-	ctx ofctx.Context,
+	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
-	fn func(ofctx.Context, []byte) (ofctx.Out, error),
+	fn func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error),
 ) error {
 	// Register the asynchronous functions (based on the Dapr runtime)
-	return func(f func(ofctx.Context, []byte) (ofctx.Out, error)) error {
+	return func(f func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error)) error {
 		var funcErr error
 
 		// Initialize dapr client if it is nil
-		ofctx.InitDaprClientIfNil(&ctx)
+		ctx.InitDaprClientIfNil()
 
 		// Serving function with inputs
-		if !ctx.InputsIsEmpty() {
-			for name, input := range ctx.Inputs {
+		if ctx.HasInputs() {
+			for name, input := range ctx.GetInputs() {
 				switch input.Type {
 				case ofctx.OpenFuncBinding:
 					input.Uri = input.Component
 					funcErr = r.handler.AddBindingInvocationHandler(input.Uri, func(c context.Context, in *dapr.BindingEvent) (out []byte, err error) {
 						rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-						rm.FuncContext.EventMeta.InputName = name
-						rm.FuncContext.EventMeta.BindingEvent = in
+						rm.FuncContext.SetEventMeta(name, in)
+						rm.FunctionRunWrapperWithHooks(fn)
 
-						rm.ProcessPreHooks()
-
-						rm.FuncContext.Out, rm.FuncContext.Error = f(rm.FuncContext, in.Data)
-
-						rm.ProcessPostHooks()
-
-						switch rm.FuncContext.Out.Code {
+						switch rm.FuncOut.GetCode() {
 						case ofctx.Success:
-							return rm.FuncContext.Out.Data, nil
+							return rm.FuncOut.GetData(), nil
 						case ofctx.InternalError:
-							return nil, rm.FuncContext.Out.Error
+							return nil, rm.FuncContext.GetError()
 						default:
 							return nil, nil
 						}
@@ -106,21 +99,15 @@ func (r *Runtime) RegisterOpenFunction(
 					}
 					funcErr = r.handler.AddTopicEventHandler(sub, func(c context.Context, e *dapr.TopicEvent) (retry bool, err error) {
 						rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-						rm.FuncContext.EventMeta.InputName = name
-						rm.FuncContext.EventMeta.TopicEvent = e
+						rm.FuncContext.SetEventMeta(name, e)
+						rm.FunctionRunWrapperWithHooks(fn)
 
-						rm.ProcessPreHooks()
-
-						rm.FuncContext.Out, rm.FuncContext.Error = f(rm.FuncContext, convertTopicEventToByte(e.Data))
-
-						rm.ProcessPostHooks()
-
-						switch rm.FuncContext.Out.Code {
+						switch rm.FuncOut.GetCode() {
 						case ofctx.Success:
 							return false, nil
 						case ofctx.InternalError:
-							err = rm.FuncContext.Out.Error
-							if retry, ok := rm.FuncContext.Out.Metadata["retry"]; ok {
+							err = rm.FuncContext.GetError()
+							if retry, ok := rm.FuncOut.GetMetadata()["retry"]; ok {
 								if strings.EqualFold(retry, "true") {
 									return true, err
 								} else if strings.EqualFold(retry, "false") {
@@ -141,40 +128,15 @@ func (r *Runtime) RegisterOpenFunction(
 					// When the function throws an exception,
 					// first call client.Close() to close the dapr client,
 					// then set fwk.funcContext.daprClient to nil
-					ofctx.DestroyDaprClient(&ctx)
+					ctx.DestroyDaprClient()
 					klog.Errorf("failed to add dapr service handler: %v\n", funcErr)
 					return funcErr
 				}
 			}
 			// Serving function without inputs
-		} else {
-			rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-			rm.ProcessPreHooks()
-
-			rm.FuncContext.Out, rm.FuncContext.Error = f(rm.FuncContext, nil)
-
-			rm.ProcessPostHooks()
-
-			switch rm.FuncContext.Out.Code {
-			case ofctx.Success:
-				return nil
-			case ofctx.InternalError:
-				return rm.FuncContext.Out.Error
-			default:
-				return nil
-			}
 		}
-		return nil
+		err := errors.New("no inputs defined for the function")
+		klog.Errorf("failed to register function: %v\n", err)
+		return err
 	}(fn)
-}
-
-func convertTopicEventToByte(data interface{}) []byte {
-	if d, ok := data.([]byte); ok {
-		return d
-	}
-	if d, err := json.Marshal(data); err != nil {
-		return nil
-	} else {
-		return d
-	}
 }

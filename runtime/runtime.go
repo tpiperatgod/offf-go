@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -14,20 +15,20 @@ import (
 type Interface interface {
 	Start(ctx context.Context) error
 	RegisterHTTPFunction(
-		ctx ofctx.Context,
+		ctx ofctx.RuntimeContext,
 		prePlugins []plugin.Plugin,
 		postPlugins []plugin.Plugin,
 		fn func(http.ResponseWriter, *http.Request) error,
 	) error
 	RegisterOpenFunction(
-		ctx ofctx.Context,
+		ctx ofctx.RuntimeContext,
 		prePlugins []plugin.Plugin,
 		postPlugins []plugin.Plugin,
-		fn func(ofctx.Context, []byte) (ofctx.Out, error),
+		fn func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error),
 	) error
 	RegisterCloudEventFunction(
 		ctx context.Context,
-		funcContex ofctx.Context,
+		funcContex ofctx.RuntimeContext,
 		prePlugins []plugin.Plugin,
 		postPlugins []plugin.Plugin,
 		fn func(context.Context, cloudevents.Event) error,
@@ -35,16 +36,18 @@ type Interface interface {
 }
 
 type RuntimeManager struct {
-	FuncContext ofctx.Context
+	FuncContext ofctx.RuntimeContext
+	FuncOut     ofctx.FunctionOut
 	prePlugins  []plugin.Plugin
 	postPlugins []plugin.Plugin
 	pluginState map[string]plugin.Plugin
 }
 
-func NewRuntimeManager(funcContext ofctx.Context, prePlugin []plugin.Plugin, postPlugin []plugin.Plugin) *RuntimeManager {
+func NewRuntimeManager(funcContext ofctx.RuntimeContext, prePlugin []plugin.Plugin, postPlugin []plugin.Plugin) *RuntimeManager {
 	ctx := funcContext
 	rm := &RuntimeManager{
 		FuncContext: ctx,
+		FuncOut:     ctx.GetOut(),
 		prePlugins:  prePlugin,
 		postPlugins: postPlugin,
 	}
@@ -93,5 +96,45 @@ func (rm *RuntimeManager) ProcessPostHooks() {
 		if err := plg.ExecPostHook(rm.FuncContext, rm.pluginState); err != nil {
 			klog.Warningf("plugin %s failed in post phase: %s", plg.Name(), err.Error())
 		}
+	}
+}
+
+func (rm *RuntimeManager) FunctionRunWrapperWithHooks(fn interface{}) {
+	functionContext := rm.FuncContext.GetContext()
+
+	rm.ProcessPreHooks()
+
+	if function, ok := fn.(func(http.ResponseWriter, *http.Request) error); ok {
+		srMeta := rm.FuncContext.GetSyncRequestMeta()
+		rm.FuncContext.WithError(function(srMeta.ResponseWriter, srMeta.Request))
+	} else if function, ok := fn.(func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error)); ok {
+		if rm.FuncContext.GetBindingEventMeta() != nil {
+			out, err := function(functionContext, rm.FuncContext.GetBindingEventMeta().Data)
+			rm.FuncContext.WithOut(out.GetOut())
+			rm.FuncContext.WithError(err)
+		} else if rm.FuncContext.GetTopicEventMeta() != nil {
+			out, err := function(functionContext, convertTopicEventToByte(rm.FuncContext.GetTopicEventMeta().Data))
+			rm.FuncContext.WithOut(out.GetOut())
+			rm.FuncContext.WithError(err)
+		} else {
+			out, err := function(functionContext, nil)
+			rm.FuncContext.WithOut(out.GetOut())
+			rm.FuncContext.WithError(err)
+		}
+	} else if function, ok := fn.(func(context.Context, cloudevents.Event) error); ok {
+		rm.FuncContext.WithError(function(rm.FuncContext.GetNativeContext(), *rm.FuncContext.GetCloudEventMeta()))
+	}
+
+	rm.ProcessPostHooks()
+}
+
+func convertTopicEventToByte(data interface{}) []byte {
+	if d, ok := data.([]byte); ok {
+		return d
+	}
+	if d, err := json.Marshal(data); err != nil {
+		return nil
+	} else {
+		return d
 	}
 }

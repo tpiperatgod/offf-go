@@ -3,7 +3,6 @@ package knative
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -49,66 +48,55 @@ func (r *Runtime) Start(ctx context.Context) error {
 }
 
 func (r *Runtime) RegisterOpenFunction(
-	ctx ofctx.Context,
+	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
-	fn func(ofctx.Context, []byte) (ofctx.Out, error),
+	fn func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error),
 ) error {
+	// Initialize dapr client if it is nil
+	ctx.InitDaprClientIfNil()
+
 	// Register the synchronous function (based on Knaitve runtime)
-	return func(f func(ofctx.Context, []byte) (ofctx.Out, error)) error {
-		r.handler.HandleFunc(r.pattern, func(w http.ResponseWriter, r *http.Request) {
-			rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-			rm.FuncContext.SyncRequestMeta.ResponseWriter = w
-			rm.FuncContext.SyncRequestMeta.Request = r
-			defer RecoverPanicHTTP(w, "Function panic")
+	r.handler.HandleFunc(r.pattern, func(w http.ResponseWriter, r *http.Request) {
+		rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
+		rm.FuncContext.SetSyncRequestMeta(w, r)
+		defer RecoverPanicHTTP(w, "Function panic")
+		rm.FunctionRunWrapperWithHooks(fn)
 
-			rm.ProcessPreHooks()
-
-			rm.FuncContext.Out, rm.FuncContext.Error = f(rm.FuncContext, convertRequestBodyToByte(r))
-
-			rm.ProcessPostHooks()
-
-			switch rm.FuncContext.Out.Code {
-			case ofctx.Success:
-				w.Header().Set(functionStatusHeader, successStatus)
-				return
-			case ofctx.InternalError:
-				w.Header().Set(functionStatusHeader, errorStatus)
-				w.WriteHeader(int(rm.FuncContext.Out.Code))
-				return
-			default:
-				return
-			}
-		})
-		return nil
-	}(fn)
+		switch rm.FuncOut.GetCode() {
+		case ofctx.Success:
+			w.Header().Set(functionStatusHeader, successStatus)
+			return
+		case ofctx.InternalError:
+			w.Header().Set(functionStatusHeader, errorStatus)
+			w.WriteHeader(rm.FuncOut.GetCode())
+			return
+		default:
+			return
+		}
+	})
+	ctx.DestroyDaprClient()
+	return nil
 }
 
 func (r *Runtime) RegisterHTTPFunction(
-	ctx ofctx.Context,
+	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
 	fn func(http.ResponseWriter, *http.Request) error,
 ) error {
 	r.handler.HandleFunc(r.pattern, func(w http.ResponseWriter, r *http.Request) {
 		rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-		rm.FuncContext.SyncRequestMeta.ResponseWriter = w
-		rm.FuncContext.SyncRequestMeta.Request = r
+		rm.FuncContext.SetSyncRequestMeta(w, r)
 		defer RecoverPanicHTTP(w, "Function panic")
-
-		rm.ProcessPreHooks()
-
-		rm.FuncContext.Error = fn(w, r)
-
-		rm.ProcessPostHooks()
-
+		rm.FunctionRunWrapperWithHooks(fn)
 	})
 	return nil
 }
 
 func (r *Runtime) RegisterCloudEventFunction(
 	ctx context.Context,
-	funcContext ofctx.Context,
+	funcContext ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
 	fn func(context.Context, cloudevents.Event) error,
@@ -121,15 +109,9 @@ func (r *Runtime) RegisterCloudEventFunction(
 
 	handleFn, err := cloudevents.NewHTTPReceiveHandler(ctx, p, func(ctx context.Context, ce cloudevents.Event) error {
 		rm := runtime.NewRuntimeManager(funcContext, prePlugins, postPlugins)
-		rm.FuncContext.EventMeta.CloudEvent = &ce
-
-		rm.ProcessPreHooks()
-
-		rm.FuncContext.Error = fn(ctx, ce)
-
-		rm.ProcessPostHooks()
-
-		return funcContext.Error
+		rm.FuncContext.SetEventMeta("", ce)
+		rm.FunctionRunWrapperWithHooks(fn)
+		return rm.FuncContext.GetError()
 	})
 
 	if err != nil {
@@ -157,12 +139,4 @@ func writeHTTPErrorResponse(w http.ResponseWriter, statusCode int, status, msg s
 	w.Header().Set(functionStatusHeader, status)
 	w.WriteHeader(statusCode)
 	fmt.Fprintf(w, msg)
-}
-
-func convertRequestBodyToByte(r *http.Request) []byte {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil
-	}
-	return body
 }
