@@ -1,0 +1,46 @@
+name: Main CI WorkFlow
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/**'
+      - 'context/**'
+      - 'framework/**'
+      - 'plugin/**'
+      - 'runtime/**'
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    name: Build and Unit Test
+    env:
+      GO111MODULE: "on"
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.16
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Test
+      run: go test -v ./...
+
+#  e2e_test:
+#    runs-on: ubuntu-latest
+#    timeout-minutes: 30
+#    name: E2E Tests
+#    steps:
+#      - name: Install Go
+#        uses: actions/setup-go@v2
+#        with:
+#          go-version: 1.16.x
+#
+#      - name: Install Dapr
+#        run: |
+#          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
+#          dapr init --runtime-version 1.5.1

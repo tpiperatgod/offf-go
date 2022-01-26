@@ -113,7 +113,7 @@ func TestParseFunctionContext(t *testing.T) {
 	// test `podName`, `podNamespace` field
 	if err := os.Setenv(PodNameEnvName, "test-pod"); err == nil {
 		if err := os.Setenv(PodNamespaceEnvName, "test"); err == nil {
-			if err := os.Setenv(functionContextEnvName, funcCtxWithKnativeRuntime); err == nil {
+			if err := os.Setenv(FunctionContextEnvName, funcCtxWithKnativeRuntime); err == nil {
 				if ctx, err := GetRuntimeContext(); err != nil {
 					t.Fatalf("Error parse function context: %s", err.Error())
 				} else {
@@ -135,7 +135,7 @@ func TestParseFunctionContext(t *testing.T) {
 	}
 
 	// test `runtime` field
-	if err := os.Setenv(functionContextEnvName, baseFuncCtx); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, baseFuncCtx); err == nil {
 		if _, err := GetRuntimeContext(); err == nil || !strings.Contains(err.Error(), "invalid runtime") {
 			t.Fatal("Error parse function context")
 		}
@@ -143,7 +143,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithWrongRuntime); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithWrongRuntime); err == nil {
 		if _, err := GetRuntimeContext(); err == nil || !strings.Contains(err.Error(), "invalid runtime") {
 			t.Fatal("Error parse function context: failed to parse runtime")
 		}
@@ -151,7 +151,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithKnativeRuntime); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithKnativeRuntime); err == nil {
 		if ctx, err := GetRuntimeContext(); err != nil {
 			t.Fatalf("Error parse function context: %s", err.Error())
 		} else {
@@ -163,7 +163,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithAsyncRuntime); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithAsyncRuntime); err == nil {
 		if ctx, err := GetRuntimeContext(); err != nil {
 			t.Fatalf("Error parse function context: %s", err.Error())
 		} else {
@@ -176,7 +176,7 @@ func TestParseFunctionContext(t *testing.T) {
 	}
 
 	// test `port` field
-	if err := os.Setenv(functionContextEnvName, funcCtxWithAsyncRuntime); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithAsyncRuntime); err == nil {
 		if ctx, err := GetRuntimeContext(); err != nil {
 			t.Fatalf("Error parse function context: %s", err.Error())
 		} else {
@@ -188,7 +188,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithCustomPort); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithCustomPort); err == nil {
 		if ctx, err := GetRuntimeContext(); err != nil {
 			t.Fatalf("Error parse function context: %s", err.Error())
 		} else {
@@ -200,7 +200,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithWrongPort); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithWrongPort); err == nil {
 		if _, err := GetRuntimeContext(); err == nil || !strings.Contains(err.Error(), "error parsing port") {
 			t.Fatal("Error parse function context: failed to parse port")
 		}
@@ -209,7 +209,7 @@ func TestParseFunctionContext(t *testing.T) {
 	}
 
 	// test `prePlugins`, `postPlugins`, `pluginsTracing` fields
-	if err := os.Setenv(functionContextEnvName, funcCtxWithPlugins); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithPlugins); err == nil {
 		if ctx, err := GetRuntimeContext(); err != nil {
 			t.Fatalf("Error parse function context: %s", err.Error())
 		} else {
@@ -225,7 +225,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithTracingCfg); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithTracingCfg); err == nil {
 		if ctx, err := GetRuntimeContext(); err != nil {
 			t.Fatalf("Error parse function context: %s", err.Error())
 		} else {
@@ -245,7 +245,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithWrongTracingCfg); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithWrongTracingCfg); err == nil {
 		if _, err := GetRuntimeContext(); err == nil || !strings.Contains(err.Error(), "the tracing plugin is enabled, but its configuration is incorrect") {
 			t.Fatal("Error parse function context: failed to parse tracing config")
 		}
@@ -253,7 +253,7 @@ func TestParseFunctionContext(t *testing.T) {
 		t.Fatal("Error set function context env")
 	}
 
-	if err := os.Setenv(functionContextEnvName, funcCtxWithWrongTracingCfgProvider); err == nil {
+	if err := os.Setenv(FunctionContextEnvName, funcCtxWithWrongTracingCfgProvider); err == nil {
 		if _, err := GetRuntimeContext(); err == nil || !strings.Contains(err.Error(), "invalid tracing provider name") {
 			t.Fatal("Error parse function context: failed to parse tracing config")
 		}

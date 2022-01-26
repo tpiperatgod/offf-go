@@ -109,7 +109,7 @@ func (r *Runtime) RegisterCloudEventFunction(
 
 	handleFn, err := cloudevents.NewHTTPReceiveHandler(ctx, p, func(ctx context.Context, ce cloudevents.Event) error {
 		rm := runtime.NewRuntimeManager(funcContext, prePlugins, postPlugins)
-		rm.FuncContext.SetEventMeta("", ce)
+		rm.FuncContext.SetEventMeta("", &ce)
 		rm.FunctionRunWrapperWithHooks(fn)
 		return rm.FuncContext.GetError()
 	})
@@ -118,9 +118,16 @@ func (r *Runtime) RegisterCloudEventFunction(
 		klog.Errorf("failed to create handler: %v\n", err)
 		return err
 	}
-
-	r.handler.Handle("/", handleFn)
+	r.handler.Handle(r.pattern, handleFn)
 	return nil
+}
+
+func (r *Runtime) Name() ofctx.Runtime {
+	return ofctx.Knative
+}
+
+func (r *Runtime) GetHTTPHandler() http.Handler {
+	return r.handler
 }
 
 func RecoverPanicHTTP(w http.ResponseWriter, msg string) {

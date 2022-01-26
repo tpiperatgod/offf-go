@@ -140,3 +140,11 @@ func (r *Runtime) RegisterOpenFunction(
 		return err
 	}(fn)
 }
+
+func (r *Runtime) Name() ofctx.Runtime {
+	return ofctx.Async
+}
+
+func (r *Runtime) GetHTTPHandler() http.Handler {
+	return nil
+}

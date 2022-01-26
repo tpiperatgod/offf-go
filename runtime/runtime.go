@@ -33,6 +33,8 @@ type Interface interface {
 		postPlugins []plugin.Plugin,
 		fn func(context.Context, cloudevents.Event) error,
 	) error
+	Name() ofctx.Runtime
+	GetHTTPHandler() http.Handler
 }
 
 type RuntimeManager struct {
@@ -122,7 +124,11 @@ func (rm *RuntimeManager) FunctionRunWrapperWithHooks(fn interface{}) {
 			rm.FuncContext.WithError(err)
 		}
 	} else if function, ok := fn.(func(context.Context, cloudevents.Event) error); ok {
-		rm.FuncContext.WithError(function(rm.FuncContext.GetNativeContext(), *rm.FuncContext.GetCloudEventMeta()))
+		ce := cloudevents.Event{}
+		if rm.FuncContext.GetCloudEventMeta() != nil {
+			ce = *rm.FuncContext.GetCloudEventMeta()
+		}
+		rm.FuncContext.WithError(function(rm.FuncContext.GetNativeContext(), ce))
 	}
 
 	rm.ProcessPostHooks()

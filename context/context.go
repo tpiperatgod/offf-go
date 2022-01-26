@@ -22,7 +22,7 @@ var (
 )
 
 const (
-	functionContextEnvName                    = "FUNC_CONTEXT"
+	FunctionContextEnvName                    = "FUNC_CONTEXT"
 	PodNameEnvName                            = "POD_NAME"
 	PodNamespaceEnvName                       = "POD_NAMESPACE"
 	ModeEnvName                               = "CONTEXT_MODE"
@@ -295,7 +295,7 @@ func (ctx *Context) SetSyncRequestMeta(w http.ResponseWriter, r *http.Request) {
 func (ctx *Context) SetEventMeta(inputName string, event interface{}) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
-	switch event.(type) {
+	switch t := event.(type) {
 	case *common.BindingEvent:
 		ctx.EventMeta.BindingEvent = event.(*common.BindingEvent)
 	case *common.TopicEvent:
@@ -303,7 +303,7 @@ func (ctx *Context) SetEventMeta(inputName string, event interface{}) {
 	case *cloudevents.Event:
 		ctx.EventMeta.CloudEvent = event.(*cloudevents.Event)
 	default:
-		klog.Error("failed to resolve event type")
+		klog.Error("failed to resolve event type: %v", t)
 	}
 	ctx.EventMeta.InputName = inputName
 }
@@ -465,9 +465,9 @@ func parseContext() (*Context, error) {
 		Outputs: make(map[string]*Output),
 	}
 
-	data := os.Getenv(functionContextEnvName)
+	data := os.Getenv(FunctionContextEnvName)
 	if data == "" {
-		return nil, fmt.Errorf("env %s not found", functionContextEnvName)
+		return nil, fmt.Errorf("env %s not found", FunctionContextEnvName)
 	}
 
 	err := json.Unmarshal([]byte(data), ctx)

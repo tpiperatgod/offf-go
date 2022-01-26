@@ -29,6 +29,7 @@ type Framework interface {
 	Register(ctx context.Context, fn interface{}) error
 	RegisterPlugins(customPlugins map[string]plugin.Plugin)
 	Start(ctx context.Context) error
+	GetRuntime() runtime.Interface
 }
 
 func NewFramework() (*functionsFrameworkImpl, error) {
@@ -121,6 +122,10 @@ func (fwk *functionsFrameworkImpl) RegisterPlugins(customPlugins map[string]plug
 			fwk.postPlugins = append(fwk.postPlugins, plg)
 		}
 	}
+}
+
+func (fwk *functionsFrameworkImpl) GetRuntime() runtime.Interface {
+	return fwk.runtime
 }
 
 func createRuntime(fwk *functionsFrameworkImpl) error {
