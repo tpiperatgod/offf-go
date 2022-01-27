@@ -6,14 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/dapr/dapr/pkg/proto/runtime/v1"
+	"github.com/dapr/go-sdk/service/common"
+	dapr "github.com/dapr/go-sdk/service/common"
+	"github.com/stretchr/testify/assert"
 
 	ofctx "github.com/tpiperatgod/offf-go/context"
+	"github.com/tpiperatgod/offf-go/runtime/async"
 )
 
 func fakeHTTPFunction(w http.ResponseWriter, r *http.Request) error {
@@ -24,6 +30,24 @@ func fakeHTTPFunction(w http.ResponseWriter, r *http.Request) error {
 func fakeCloudEventsFunction(ctx context.Context, ce cloudevents.Event) error {
 	fmt.Println(string(ce.Data()))
 	return nil
+}
+
+func fakeBindingsFunction(ctx ofctx.UserContext, in []byte) (ofctx.FunctionOut, error) {
+	if in != nil {
+		log.Printf("binding - Data: %s", in)
+	} else {
+		log.Print("binding - Data: Received")
+	}
+	return ctx.ReturnOnSuccess().WithData([]byte("hello there")), nil
+}
+
+func fakePubsubFunction(ctx ofctx.UserContext, in []byte) (ofctx.FunctionOut, error) {
+	if in != nil {
+		log.Printf("pubsub - Data: %s", in)
+	} else {
+		log.Print("pubsub - Data: Received")
+	}
+	return ctx.ReturnOnSuccess().WithData([]byte("hello there")), nil
 }
 
 func TestHTTPFunction(t *testing.T) {
@@ -49,7 +73,12 @@ func TestHTTPFunction(t *testing.T) {
 	if fwk.GetRuntime() == nil {
 		t.Fatal("failed to create runtime")
 	}
-	srv := httptest.NewServer(fwk.GetRuntime().GetHTTPHandler())
+	handler := fwk.GetRuntime().GetHandler()
+	if handler == nil {
+		t.Fatal("handler is nil")
+	}
+
+	srv := httptest.NewServer(handler.(http.Handler))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/http")
@@ -100,13 +129,19 @@ func TestCloudEventFunction(t *testing.T) {
 	fwk.RegisterPlugins(nil)
 
 	if err := fwk.Register(ctx, fakeCloudEventsFunction); err != nil {
-		t.Fatalf("failed to register CloudEvents function: %v\n", err)
+		t.Fatalf("failed to register CloudEvents function: %v", err)
 	}
 
 	if fwk.GetRuntime() == nil {
-		t.Fatal("failed to create runtime\n")
+		t.Fatal("failed to create runtime")
 	}
-	srv := httptest.NewServer(fwk.GetRuntime().GetHTTPHandler())
+
+	handler := fwk.GetRuntime().GetHandler()
+	if handler == nil {
+		t.Fatal("handler is nil")
+	}
+
+	srv := httptest.NewServer(handler.(http.Handler))
 	defer srv.Close()
 
 	messageByte, err := json.Marshal(ceDemo.message)
@@ -133,8 +168,166 @@ func TestCloudEventFunction(t *testing.T) {
 	}
 }
 
+func TestAsyncBindingsFunction(t *testing.T) {
+	env := `{
+  "name": "function-demo",
+  "version": "v1",
+  "runtime": "Async",
+  "requestID": "a0f2ad8d-5062-4812-91e9-95416489fb01",
+  "port": "50003",
+  "inputs": {
+    "cron": {
+      "uri": "test",
+      "type": "bindings",
+      "component": "test"
+    }
+  }
+}`
+	methodName := "test"
+	ctx := context.Background()
+	fwk, err := createFramework(env)
+	if err != nil {
+		t.Fatalf("failed to create framework: %v", err)
+	}
+
+	fwk.RegisterPlugins(nil)
+
+	if err := fwk.Register(ctx, fakeBindingsFunction); err != nil {
+		t.Fatalf("failed to register CloudEvents function: %v", err)
+	}
+
+	if fwk.GetRuntime() == nil {
+		t.Fatal("failed to create runtime")
+	}
+
+	server := fwk.GetRuntime().GetHandler()
+	if server == nil {
+		t.Fatal("server is nil")
+	}
+	s := server.(*async.FakeServer)
+	startTestServer(s)
+
+	t.Run("binding without event", func(t *testing.T) {
+		_, err := s.OnBindingEvent(ctx, nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("binding event for wrong method", func(t *testing.T) {
+		in := &runtime.BindingEventRequest{Name: "invalid"}
+		_, err := s.OnBindingEvent(ctx, in)
+		assert.Error(t, err)
+	})
+
+	t.Run("binding event without data", func(t *testing.T) {
+		in := &runtime.BindingEventRequest{Name: methodName}
+		out, err := s.OnBindingEvent(ctx, in)
+		assert.NoError(t, err)
+		assert.NotNil(t, out)
+	})
+
+	t.Run("binding event with data", func(t *testing.T) {
+		data := "hello there"
+		in := &runtime.BindingEventRequest{
+			Name: methodName,
+			Data: []byte(data),
+		}
+		out, err := s.OnBindingEvent(ctx, in)
+		assert.NoError(t, err)
+		assert.NotNil(t, out)
+		assert.Equal(t, data, string(out.Data))
+	})
+
+	t.Run("binding event with metadata", func(t *testing.T) {
+		in := &runtime.BindingEventRequest{
+			Name:     methodName,
+			Metadata: map[string]string{"k1": "v1", "k2": "v2"},
+		}
+		out, err := s.OnBindingEvent(ctx, in)
+		assert.NoError(t, err)
+		assert.NotNil(t, out)
+	})
+
+	stopTestServer(t, s)
+
+}
+
+func TestAsyncPubsubTopic(t *testing.T) {
+	env := `{
+  "name": "function-demo",
+  "version": "v1",
+  "runtime": "Async",
+  "requestID": "a0f2ad8d-5062-4812-91e9-95416489fb01",
+  "port": "50003",
+  "inputs": {
+    "sub": {
+      "uri": "my_topic",
+      "type": "pubsub",
+      "component": "msg"
+    }
+  }
+}`
+
+	sub := &common.Subscription{
+		PubsubName: "msg",
+		Topic:      "my_topic",
+	}
+	ctx := context.Background()
+	fwk, err := createFramework(env)
+	if err != nil {
+		t.Fatalf("failed to create framework: %v", err)
+	}
+
+	fwk.RegisterPlugins(nil)
+
+	if err := fwk.Register(ctx, fakeBindingsFunction); err != nil {
+		t.Fatalf("failed to register CloudEvents function: %v", err)
+	}
+
+	if fwk.GetRuntime() == nil {
+		t.Fatal("failed to create runtime")
+	}
+
+	server := fwk.GetRuntime().GetHandler()
+	if server == nil {
+		t.Fatal("server is nil")
+	}
+	s := server.(*async.FakeServer)
+	startTestServer(s)
+
+	t.Run("topic event without request", func(t *testing.T) {
+		_, err := s.OnTopicEvent(ctx, nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("topic event for wrong topic", func(t *testing.T) {
+		in := &runtime.TopicEventRequest{
+			Topic: "invalid",
+		}
+		_, err := s.OnTopicEvent(ctx, in)
+		assert.Error(t, err)
+	})
+
+	t.Run("topic event for valid topic", func(t *testing.T) {
+		in := &runtime.TopicEventRequest{
+			Id:              "a123",
+			Source:          "test",
+			Type:            "test",
+			SpecVersion:     "v1.0",
+			DataContentType: "text/plain",
+			Data:            []byte("test"),
+			Topic:           sub.Topic,
+			PubsubName:      sub.PubsubName,
+		}
+		_, err := s.OnTopicEvent(ctx, in)
+		assert.NoError(t, err)
+	})
+
+	stopTestServer(t, s)
+}
+
 func createFramework(env string) (Framework, error) {
 	os.Setenv(ofctx.ModeEnvName, ofctx.SelfHostMode)
+	os.Setenv(ofctx.TestModeEnvName, ofctx.TestModeOn)
 	os.Setenv(ofctx.FunctionContextEnvName, env)
 	fwk, err := NewFramework()
 	if err != nil {
@@ -142,4 +335,18 @@ func createFramework(env string) (Framework, error) {
 	} else {
 		return fwk, nil
 	}
+}
+
+func startTestServer(server dapr.Service) {
+	go func() {
+		if err := server.Start(); err != nil && err.Error() != "closed" {
+			panic(err)
+		}
+	}()
+}
+
+func stopTestServer(t *testing.T, server dapr.Service) {
+	assert.NotNil(t, server)
+	err := server.Stop()
+	assert.Nilf(t, err, "error stopping server")
 }

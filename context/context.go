@@ -22,6 +22,7 @@ var (
 )
 
 const (
+	TestModeEnvName                           = "TEST_MODE"
 	FunctionContextEnvName                    = "FUNC_CONTEXT"
 	PodNameEnvName                            = "POD_NAME"
 	PodNamespaceEnvName                       = "POD_NAMESPACE"
@@ -38,6 +39,7 @@ const (
 	TracingProviderOpentelemetry              = "opentelemetry"
 	KubernetesMode                            = "kubernetes"
 	SelfHostMode                              = "self-host"
+	TestModeOn                                = "on"
 )
 
 type Runtime string
@@ -49,8 +51,6 @@ type RuntimeContext interface {
 	GetOut() *Out
 	HasInputs() bool
 	HasOutputs() bool
-	ReturnOnSuccess() Out
-	ReturnOnInternalError() Out
 	InitDaprClientIfNil()
 	DestroyDaprClient()
 	GetPrePlugins() []string
@@ -76,6 +76,8 @@ type RuntimeContext interface {
 
 type UserContext interface {
 	Send(outputName string, data []byte) ([]byte, error)
+	ReturnOnSuccess() FunctionOut
+	ReturnOnInternalError() FunctionOut
 }
 
 type FunctionOut interface {
@@ -220,19 +222,23 @@ func (ctx *Context) HasOutputs() bool {
 	return true
 }
 
-func (ctx *Context) ReturnOnSuccess() Out {
-	return Out{
+func (ctx *Context) ReturnOnSuccess() FunctionOut {
+	return &Out{
 		Code: Success,
 	}
 }
 
-func (ctx *Context) ReturnOnInternalError() Out {
-	return Out{
+func (ctx *Context) ReturnOnInternalError() FunctionOut {
+	return &Out{
 		Code: InternalError,
 	}
 }
 
 func (ctx *Context) InitDaprClientIfNil() {
+	if testMode := os.Getenv(TestModeEnvName); testMode == TestModeOn {
+		return
+	}
+
 	if ctx.daprClient == nil {
 		ctx.mu.Lock()
 		defer ctx.mu.Unlock()
@@ -245,6 +251,10 @@ func (ctx *Context) InitDaprClientIfNil() {
 }
 
 func (ctx *Context) DestroyDaprClient() {
+	if testMode := os.Getenv(TestModeEnvName); testMode == TestModeOn {
+		return
+	}
+
 	if ctx.daprClient != nil {
 		ctx.mu.Lock()
 		defer ctx.mu.Unlock()
@@ -569,4 +579,8 @@ func parseContext() (*Context, error) {
 	}
 
 	return ctx, nil
+}
+
+func NewFunctionOut() *Out {
+	return &Out{}
 }

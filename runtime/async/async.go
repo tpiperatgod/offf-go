@@ -2,14 +2,15 @@ package async
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	dapr "github.com/dapr/go-sdk/service/common"
 	daprd "github.com/dapr/go-sdk/service/grpc"
+	"github.com/pkg/errors"
 	"k8s.io/klog/v2"
 
 	ofctx "github.com/tpiperatgod/offf-go/context"
@@ -18,19 +19,33 @@ import (
 )
 
 type Runtime struct {
-	port    string
-	handler dapr.Service
+	port       string
+	handler    dapr.Service
+	grpcHander *FakeServer
 }
 
 func NewAsyncRuntime(port string) (*Runtime, error) {
+	if testMode := os.Getenv(ofctx.TestModeEnvName); testMode == ofctx.TestModeOn {
+		handler, grpcHandler, err := NewFakeService(fmt.Sprintf(":%s", port))
+		if err != nil {
+			klog.Errorf("failed to create dapr grpc service: %v", err)
+			return nil, err
+		}
+		return &Runtime{
+			port:       port,
+			handler:    handler,
+			grpcHander: grpcHandler,
+		}, nil
+	}
 	handler, err := daprd.NewService(fmt.Sprintf(":%s", port))
 	if err != nil {
-		klog.Errorf("failed to create dapr grpc service: %v\n", err)
+		klog.Errorf("failed to create dapr grpc service: %v", err)
 		return nil, err
 	}
 	return &Runtime{
-		port:    port,
-		handler: handler,
+		port:       port,
+		handler:    handler,
+		grpcHander: nil,
 	}, nil
 }
 
@@ -133,7 +148,8 @@ func (r *Runtime) RegisterOpenFunction(
 					return funcErr
 				}
 			}
-			// Serving function without inputs
+			// If a function has no input, just return it.
+			return nil
 		}
 		err := errors.New("no inputs defined for the function")
 		klog.Errorf("failed to register function: %v\n", err)
@@ -145,6 +161,6 @@ func (r *Runtime) Name() ofctx.Runtime {
 	return ofctx.Async
 }
 
-func (r *Runtime) GetHTTPHandler() http.Handler {
-	return nil
+func (r *Runtime) GetHandler() interface{} {
+	return r.grpcHander
 }

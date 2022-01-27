@@ -126,7 +126,7 @@ func (r *Runtime) Name() ofctx.Runtime {
 	return ofctx.Knative
 }
 
-func (r *Runtime) GetHTTPHandler() http.Handler {
+func (r *Runtime) GetHandler() interface{} {
 	return r.handler
 }
 

@@ -34,7 +34,7 @@ type Interface interface {
 		fn func(context.Context, cloudevents.Event) error,
 	) error
 	Name() ofctx.Runtime
-	GetHTTPHandler() http.Handler
+	GetHandler() interface{}
 }
 
 type RuntimeManager struct {
@@ -49,9 +49,13 @@ func NewRuntimeManager(funcContext ofctx.RuntimeContext, prePlugin []plugin.Plug
 	ctx := funcContext
 	rm := &RuntimeManager{
 		FuncContext: ctx,
-		FuncOut:     ctx.GetOut(),
 		prePlugins:  prePlugin,
 		postPlugins: postPlugin,
+	}
+	if ctx.GetOut() != nil {
+		rm.FuncOut = ctx.GetOut()
+	} else {
+		rm.FuncOut = ofctx.NewFunctionOut()
 	}
 	rm.init()
 	return rm
