@@ -103,7 +103,7 @@ var (
 }`
 )
 
-// TestParseFunctionContext tests and verifies the function that parses the function Context
+// TestParseFunctionContext tests and verifies the function that parses the function FunctionContext
 func TestParseFunctionContext(t *testing.T) {
 	_, err := GetRuntimeContext()
 	if !strings.Contains(err.Error(), "env FUNC_CONTEXT not found") {

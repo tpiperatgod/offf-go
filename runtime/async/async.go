@@ -59,7 +59,7 @@ func (r *Runtime) RegisterHTTPFunction(
 	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
-	fn func(http.ResponseWriter, *http.Request) error,
+	fn func(http.ResponseWriter, *http.Request),
 ) error {
 	return errors.New("async runtime cannot register http function")
 }
@@ -78,10 +78,10 @@ func (r *Runtime) RegisterOpenFunction(
 	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
-	fn func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error),
+	fn func(ofctx.Context, []byte) (ofctx.Out, error),
 ) error {
 	// Register the asynchronous functions (based on the Dapr runtime)
-	return func(f func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error)) error {
+	return func(f func(ofctx.Context, []byte) (ofctx.Out, error)) error {
 		var funcErr error
 
 		// Initialize dapr client if it is nil

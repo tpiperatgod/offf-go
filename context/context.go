@@ -47,14 +47,14 @@ type ResourceType string
 
 type RuntimeContext interface {
 
-	// GetContext returns the pointer of raw OpenFunction Context object.
-	GetContext() *Context
+	// GetContext returns the pointer of raw OpenFunction FunctionContext object.
+	GetContext() *FunctionContext
 
 	// GetNativeContext returns the Go native context object.
 	GetNativeContext() context.Context
 
-	// GetOut returns the pointer of raw OpenFunction Out object.
-	GetOut() *Out
+	// GetOut returns the pointer of raw OpenFunction FunctionOut object.
+	GetOut() *FunctionOut
 
 	// HasInputs detects if the function has any input sources.
 	HasInputs() bool
@@ -62,7 +62,7 @@ type RuntimeContext interface {
 	// HasOutputs detects if the function has any output targets.
 	HasOutputs() bool
 
-	// InitDaprClientIfNil detects whether the dapr client in the current Context has been initialized,
+	// InitDaprClientIfNil detects whether the dapr client in the current FunctionContext has been initialized,
 	// and initializes it if it has not been initialized.
 	InitDaprClientIfNil()
 
@@ -111,8 +111,8 @@ type RuntimeContext interface {
 	// GetCloudEventMeta returns the pointer of v2.Event.
 	GetCloudEventMeta() *cloudevents.Event
 
-	// WithOut adds the Out object to the RuntimeContext.
-	WithOut(out *Out) RuntimeContext
+	// WithOut adds the FunctionOut object to the RuntimeContext.
+	WithOut(out *FunctionOut) RuntimeContext
 
 	// WithError adds the error state to the RuntimeContext.
 	WithError(err error) RuntimeContext
@@ -127,37 +127,37 @@ type RuntimeContext interface {
 	GetPluginsTracingCfg() TracingConfig
 }
 
-type UserContext interface {
+type Context interface {
 
 	// Send provides the ability to allow the user to send data to a specified output target.
 	Send(outputName string, data []byte) ([]byte, error)
 
-	// ReturnOnSuccess returns the FunctionOut with a success state.
-	ReturnOnSuccess() FunctionOut
+	// ReturnOnSuccess returns the Out with a success state.
+	ReturnOnSuccess() Out
 
-	// ReturnOnInternalError returns the FunctionOut with an error state.
-	ReturnOnInternalError() FunctionOut
+	// ReturnOnInternalError returns the Out with an error state.
+	ReturnOnInternalError() Out
 }
 
-type FunctionOut interface {
+type Out interface {
 
-	// GetOut returns the pointer of raw Out object.
-	GetOut() *Out
+	// GetOut returns the pointer of raw FunctionOut object.
+	GetOut() *FunctionOut
 
-	// GetCode returns the return code in Out.
+	// GetCode returns the return code in FunctionOut.
 	GetCode() int
 
-	// GetData returns the return data in Out.
+	// GetData returns the return data in FunctionOut.
 	GetData() []byte
 
-	// GetMetadata returns the metadata in Out.
+	// GetMetadata returns the metadata in FunctionOut.
 	GetMetadata() map[string]string
 
-	// WithCode sets the Out with new return code.
-	WithCode(code int) *Out
+	// WithCode sets the FunctionOut with new return code.
+	WithCode(code int) *FunctionOut
 
-	// WithData sets the Out with new return data.
-	WithData(data []byte) *Out
+	// WithData sets the FunctionOut with new return data.
+	WithData(data []byte) *FunctionOut
 }
 
 type TracingConfig interface {
@@ -178,7 +178,7 @@ type TracingConfig interface {
 	GetBaggage() map[string]string
 }
 
-type Context struct {
+type FunctionContext struct {
 	mu              sync.Mutex
 	Name            string               `json:"name"`
 	Version         string               `json:"version"`
@@ -194,7 +194,7 @@ type Context struct {
 	PrePlugins      []string             `json:"prePlugins,omitempty"`
 	PostPlugins     []string             `json:"postPlugins,omitempty"`
 	PluginsTracing  *PluginsTracing      `json:"pluginsTracing,omitempty"`
-	Out             *Out                 `json:"out,omitempty"`
+	Out             *FunctionOut         `json:"out,omitempty"`
 	Error           error                `json:"error,omitempty"`
 	HttpPattern     string               `json:"httpPattern,omitempty"`
 	podName         string
@@ -230,10 +230,11 @@ type Output struct {
 	Operation string            `json:"operation,omitempty"`
 }
 
-type Out struct {
+type FunctionOut struct {
 	mu       sync.Mutex
 	Code     int               `json:"code"`
 	Data     []byte            `json:"data,omitempty"`
+	Error    error             `json:"error,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
@@ -249,7 +250,36 @@ type TracingProvider struct {
 	OapServer string `json:"oapServer" yaml:"oapServer"`
 }
 
-func (ctx *Context) Send(outputName string, data []byte) ([]byte, error) {
+type ResponseWriterWrapper struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rww *ResponseWriterWrapper) Status() int {
+	return rww.statusCode
+}
+
+func (rww *ResponseWriterWrapper) Header() http.Header {
+	return rww.ResponseWriter.Header()
+}
+
+func (rww *ResponseWriterWrapper) Write(bytes []byte) (int, error) {
+	return rww.ResponseWriter.Write(bytes)
+}
+
+func (rww *ResponseWriterWrapper) WriteHeader(statusCode int) {
+	rww.statusCode = statusCode
+	rww.ResponseWriter.WriteHeader(statusCode)
+}
+
+func NewResponseWriterWrapper(w http.ResponseWriter, statusCode int) *ResponseWriterWrapper {
+	return &ResponseWriterWrapper{
+		w,
+		statusCode,
+	}
+}
+
+func (ctx *FunctionContext) Send(outputName string, data []byte) ([]byte, error) {
 	if ctx.HasOutputs() {
 		return nil, errors.New("no output")
 	}
@@ -287,7 +317,7 @@ func (ctx *Context) Send(outputName string, data []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (ctx *Context) HasInputs() bool {
+func (ctx *FunctionContext) HasInputs() bool {
 	nilInputs := map[string]*Input{}
 	if reflect.DeepEqual(ctx.Inputs, nilInputs) {
 		return false
@@ -295,7 +325,7 @@ func (ctx *Context) HasInputs() bool {
 	return true
 }
 
-func (ctx *Context) HasOutputs() bool {
+func (ctx *FunctionContext) HasOutputs() bool {
 	nilOutputs := map[string]*Output{}
 	if reflect.DeepEqual(ctx.Outputs, nilOutputs) {
 		return false
@@ -303,19 +333,19 @@ func (ctx *Context) HasOutputs() bool {
 	return true
 }
 
-func (ctx *Context) ReturnOnSuccess() FunctionOut {
-	return &Out{
+func (ctx *FunctionContext) ReturnOnSuccess() Out {
+	return &FunctionOut{
 		Code: Success,
 	}
 }
 
-func (ctx *Context) ReturnOnInternalError() FunctionOut {
-	return &Out{
+func (ctx *FunctionContext) ReturnOnInternalError() Out {
+	return &FunctionOut{
 		Code: InternalError,
 	}
 }
 
-func (ctx *Context) InitDaprClientIfNil() {
+func (ctx *FunctionContext) InitDaprClientIfNil() {
 	if testMode := os.Getenv(TestModeEnvName); testMode == TestModeOn {
 		return
 	}
@@ -331,7 +361,7 @@ func (ctx *Context) InitDaprClientIfNil() {
 	}
 }
 
-func (ctx *Context) DestroyDaprClient() {
+func (ctx *FunctionContext) DestroyDaprClient() {
 	if testMode := os.Getenv(TestModeEnvName); testMode == TestModeOn {
 		return
 	}
@@ -344,46 +374,46 @@ func (ctx *Context) DestroyDaprClient() {
 	}
 }
 
-func (ctx *Context) GetPrePlugins() []string {
+func (ctx *FunctionContext) GetPrePlugins() []string {
 	return ctx.PrePlugins
 }
 
-func (ctx *Context) GetPostPlugins() []string {
+func (ctx *FunctionContext) GetPostPlugins() []string {
 	return ctx.PostPlugins
 }
 
-func (ctx *Context) GetRuntime() Runtime {
+func (ctx *FunctionContext) GetRuntime() Runtime {
 	return ctx.Runtime
 }
 
-func (ctx *Context) GetPort() string {
+func (ctx *FunctionContext) GetPort() string {
 	return ctx.Port
 }
 
-func (ctx *Context) GetHttpPattern() string {
+func (ctx *FunctionContext) GetHttpPattern() string {
 	return ctx.HttpPattern
 }
 
-func (ctx *Context) GetError() error {
+func (ctx *FunctionContext) GetError() error {
 	return ctx.Error
 }
 
-func (ctx *Context) GetMode() string {
+func (ctx *FunctionContext) GetMode() string {
 	return ctx.mode
 }
 
-func (ctx *Context) GetNativeContext() context.Context {
+func (ctx *FunctionContext) GetNativeContext() context.Context {
 	return ctx.Ctx
 }
 
-func (ctx *Context) SetSyncRequestMeta(w http.ResponseWriter, r *http.Request) {
+func (ctx *FunctionContext) SetSyncRequestMeta(w http.ResponseWriter, r *http.Request) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	ctx.SyncRequestMeta.ResponseWriter = w
 	ctx.SyncRequestMeta.Request = r
 }
 
-func (ctx *Context) SetEventMeta(inputName string, event interface{}) {
+func (ctx *FunctionContext) SetEventMeta(inputName string, event interface{}) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	switch t := event.(type) {
@@ -399,88 +429,88 @@ func (ctx *Context) SetEventMeta(inputName string, event interface{}) {
 	ctx.EventMeta.InputName = inputName
 }
 
-func (ctx *Context) GetContext() *Context {
+func (ctx *FunctionContext) GetContext() *FunctionContext {
 	return ctx
 }
 
-func (ctx *Context) GetInputs() map[string]*Input {
+func (ctx *FunctionContext) GetInputs() map[string]*Input {
 	return ctx.Inputs
 }
 
-func (ctx *Context) GetOutputs() map[string]*Output {
+func (ctx *FunctionContext) GetOutputs() map[string]*Output {
 	return ctx.Outputs
 }
 
-func (ctx *Context) GetPodName() string {
+func (ctx *FunctionContext) GetPodName() string {
 	return ctx.podName
 }
 
-func (ctx *Context) GetPodNamespace() string {
+func (ctx *FunctionContext) GetPodNamespace() string {
 	return ctx.podNamespace
 }
 
-func (ctx *Context) GetSyncRequestMeta() *SyncRequestMetadata {
+func (ctx *FunctionContext) GetSyncRequestMeta() *SyncRequestMetadata {
 	return ctx.SyncRequestMeta
 }
 
-func (ctx *Context) GetBindingEventMeta() *common.BindingEvent {
+func (ctx *FunctionContext) GetBindingEventMeta() *common.BindingEvent {
 	return ctx.EventMeta.BindingEvent
 }
 
-func (ctx *Context) GetTopicEventMeta() *common.TopicEvent {
+func (ctx *FunctionContext) GetTopicEventMeta() *common.TopicEvent {
 	return ctx.EventMeta.TopicEvent
 }
 
-func (ctx *Context) GetCloudEventMeta() *cloudevents.Event {
+func (ctx *FunctionContext) GetCloudEventMeta() *cloudevents.Event {
 	return ctx.EventMeta.CloudEvent
 }
 
-func (ctx *Context) GetPluginsTracingCfg() TracingConfig {
+func (ctx *FunctionContext) GetPluginsTracingCfg() TracingConfig {
 	return ctx.PluginsTracing
 }
 
-func (ctx *Context) WithOut(out *Out) RuntimeContext {
+func (ctx *FunctionContext) WithOut(out *FunctionOut) RuntimeContext {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	ctx.Out = out
 	return ctx
 }
 
-func (ctx *Context) WithError(err error) RuntimeContext {
+func (ctx *FunctionContext) WithError(err error) RuntimeContext {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	ctx.Error = err
 	return ctx
 }
 
-func (ctx *Context) GetOut() *Out {
+func (ctx *FunctionContext) GetOut() *FunctionOut {
 	return ctx.Out
 }
 
-func (o *Out) GetOut() *Out {
+func (o *FunctionOut) GetOut() *FunctionOut {
 	return o
 }
 
-func (o *Out) GetCode() int {
+func (o *FunctionOut) GetCode() int {
 	return o.Code
 }
 
-func (o *Out) GetData() []byte {
+func (o *FunctionOut) GetData() []byte {
 	return o.Data
 }
 
-func (o *Out) GetMetadata() map[string]string {
+func (o *FunctionOut) GetMetadata() map[string]string {
 	return o.Metadata
 }
 
-func (o *Out) WithCode(code int) *Out {
+func (o *FunctionOut) WithCode(code int) *FunctionOut {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.Code = code
 	return o
 }
 
-func (o *Out) WithData(data []byte) *Out {
+func (o *FunctionOut) WithData(data []byte) *FunctionOut {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.Data = data
@@ -550,8 +580,8 @@ func GetRuntimeContext() (RuntimeContext, error) {
 	}
 }
 
-func parseContext() (*Context, error) {
-	ctx := &Context{
+func parseContext() (*FunctionContext, error) {
+	ctx := &FunctionContext{
 		Inputs:  make(map[string]*Input),
 		Outputs: make(map[string]*Output),
 	}
@@ -662,6 +692,6 @@ func parseContext() (*Context, error) {
 	return ctx, nil
 }
 
-func NewFunctionOut() *Out {
-	return &Out{}
+func NewFunctionOut() *FunctionOut {
+	return &FunctionOut{}
 }

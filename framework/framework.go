@@ -35,9 +35,9 @@ type Framework interface {
 func NewFramework() (*functionsFrameworkImpl, error) {
 	fwk := &functionsFrameworkImpl{}
 
-	// Parse OpenFunction Context
+	// Parse OpenFunction FunctionContext
 	if ctx, err := ofctx.GetRuntimeContext(); err != nil {
-		klog.Errorf("failed to parse OpenFunction Context: %v\n", err)
+		klog.Errorf("failed to parse OpenFunction FunctionContext: %v\n", err)
 		return nil, err
 	} else {
 		fwk.funcContext = ctx
@@ -57,12 +57,12 @@ func NewFramework() (*functionsFrameworkImpl, error) {
 }
 
 func (fwk *functionsFrameworkImpl) Register(ctx context.Context, fn interface{}) error {
-	if fnHTTP, ok := fn.(func(http.ResponseWriter, *http.Request) error); ok {
+	if fnHTTP, ok := fn.(func(http.ResponseWriter, *http.Request)); ok {
 		if err := fwk.runtime.RegisterHTTPFunction(fwk.funcContext, fwk.prePlugins, fwk.postPlugins, fnHTTP); err != nil {
 			klog.Errorf("failed to register function: %v", err)
 			return err
 		}
-	} else if fnOpenFunction, ok := fn.(func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error)); ok {
+	} else if fnOpenFunction, ok := fn.(func(ofctx.Context, []byte) (ofctx.Out, error)); ok {
 		if err := fwk.runtime.RegisterOpenFunction(fwk.funcContext, fwk.prePlugins, fwk.postPlugins, fnOpenFunction); err != nil {
 			klog.Errorf("failed to register function: %v", err)
 			return err

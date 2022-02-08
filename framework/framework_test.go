@@ -15,16 +15,14 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/dapr/dapr/pkg/proto/runtime/v1"
 	"github.com/dapr/go-sdk/service/common"
-	dapr "github.com/dapr/go-sdk/service/common"
 	"github.com/stretchr/testify/assert"
 
 	ofctx "github.com/tpiperatgod/offf-go/context"
 	"github.com/tpiperatgod/offf-go/runtime/async"
 )
 
-func fakeHTTPFunction(w http.ResponseWriter, r *http.Request) error {
+func fakeHTTPFunction(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "Hello World!")
-	return nil
 }
 
 func fakeCloudEventsFunction(ctx context.Context, ce cloudevents.Event) error {
@@ -32,7 +30,7 @@ func fakeCloudEventsFunction(ctx context.Context, ce cloudevents.Event) error {
 	return nil
 }
 
-func fakeBindingsFunction(ctx ofctx.UserContext, in []byte) (ofctx.FunctionOut, error) {
+func fakeBindingsFunction(ctx ofctx.Context, in []byte) (ofctx.Out, error) {
 	if in != nil {
 		log.Printf("binding - Data: %s", in)
 	} else {
@@ -41,7 +39,7 @@ func fakeBindingsFunction(ctx ofctx.UserContext, in []byte) (ofctx.FunctionOut, 
 	return ctx.ReturnOnSuccess().WithData([]byte("hello there")), nil
 }
 
-func fakePubsubFunction(ctx ofctx.UserContext, in []byte) (ofctx.FunctionOut, error) {
+func fakePubsubFunction(ctx ofctx.Context, in []byte) (ofctx.Out, error) {
 	if in != nil {
 		log.Printf("pubsub - Data: %s", in)
 	} else {
@@ -337,7 +335,7 @@ func createFramework(env string) (Framework, error) {
 	}
 }
 
-func startTestServer(server dapr.Service) {
+func startTestServer(server common.Service) {
 	go func() {
 		if err := server.Start(); err != nil && err.Error() != "closed" {
 			panic(err)
@@ -345,7 +343,7 @@ func startTestServer(server dapr.Service) {
 	}()
 }
 
-func stopTestServer(t *testing.T, server dapr.Service) {
+func stopTestServer(t *testing.T, server common.Service) {
 	assert.NotNil(t, server)
 	err := server.Stop()
 	assert.Nilf(t, err, "error stopping server")

@@ -51,7 +51,7 @@ func (r *Runtime) RegisterOpenFunction(
 	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
-	fn func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error),
+	fn func(ofctx.Context, []byte) (ofctx.Out, error),
 ) error {
 	// Initialize dapr client if it is nil
 	ctx.InitDaprClientIfNil()
@@ -83,7 +83,7 @@ func (r *Runtime) RegisterHTTPFunction(
 	ctx ofctx.RuntimeContext,
 	prePlugins []plugin.Plugin,
 	postPlugins []plugin.Plugin,
-	fn func(http.ResponseWriter, *http.Request) error,
+	fn func(http.ResponseWriter, *http.Request),
 ) error {
 	r.handler.HandleFunc(r.pattern, func(w http.ResponseWriter, r *http.Request) {
 		rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)

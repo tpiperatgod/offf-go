@@ -18,13 +18,13 @@ type Interface interface {
 		ctx ofctx.RuntimeContext,
 		prePlugins []plugin.Plugin,
 		postPlugins []plugin.Plugin,
-		fn func(http.ResponseWriter, *http.Request) error,
+		fn func(http.ResponseWriter, *http.Request),
 	) error
 	RegisterOpenFunction(
 		ctx ofctx.RuntimeContext,
 		prePlugins []plugin.Plugin,
 		postPlugins []plugin.Plugin,
-		fn func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error),
+		fn func(ofctx.Context, []byte) (ofctx.Out, error),
 	) error
 	RegisterCloudEventFunction(
 		ctx context.Context,
@@ -39,7 +39,7 @@ type Interface interface {
 
 type RuntimeManager struct {
 	FuncContext ofctx.RuntimeContext
-	FuncOut     ofctx.FunctionOut
+	FuncOut     ofctx.Out
 	prePlugins  []plugin.Plugin
 	postPlugins []plugin.Plugin
 	pluginState map[string]plugin.Plugin
@@ -110,10 +110,12 @@ func (rm *RuntimeManager) FunctionRunWrapperWithHooks(fn interface{}) {
 
 	rm.ProcessPreHooks()
 
-	if function, ok := fn.(func(http.ResponseWriter, *http.Request) error); ok {
+	if function, ok := fn.(func(http.ResponseWriter, *http.Request)); ok {
 		srMeta := rm.FuncContext.GetSyncRequestMeta()
-		rm.FuncContext.WithError(function(srMeta.ResponseWriter, srMeta.Request))
-	} else if function, ok := fn.(func(ofctx.UserContext, []byte) (ofctx.FunctionOut, error)); ok {
+		rww := ofctx.NewResponseWriterWrapper(srMeta.ResponseWriter, 200)
+		function(rww, srMeta.Request)
+		rm.FuncContext.WithOut(rm.FuncOut.WithCode(rww.Status()))
+	} else if function, ok := fn.(func(ofctx.Context, []byte) (ofctx.Out, error)); ok {
 		if rm.FuncContext.GetBindingEventMeta() != nil {
 			out, err := function(functionContext, rm.FuncContext.GetBindingEventMeta().Data)
 			rm.FuncContext.WithOut(out.GetOut())
