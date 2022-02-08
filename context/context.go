@@ -46,54 +46,135 @@ type Runtime string
 type ResourceType string
 
 type RuntimeContext interface {
+
+	// GetContext returns the pointer of raw OpenFunction Context object.
 	GetContext() *Context
+
+	// GetNativeContext returns the Go native context object.
 	GetNativeContext() context.Context
+
+	// GetOut returns the pointer of raw OpenFunction Out object.
 	GetOut() *Out
+
+	// HasInputs detects if the function has any input sources.
 	HasInputs() bool
+
+	// HasOutputs detects if the function has any output targets.
 	HasOutputs() bool
+
+	// InitDaprClientIfNil detects whether the dapr client in the current Context has been initialized,
+	// and initializes it if it has not been initialized.
 	InitDaprClientIfNil()
+
+	// DestroyDaprClient destroys the dapr client when the function is executed with an exception.
 	DestroyDaprClient()
+
+	// GetPrePlugins returns a list of plugin names for the previous phase of function execution.
 	GetPrePlugins() []string
+
+	// GetPostPlugins returns a list of plugin names for the post phase of function execution.
 	GetPostPlugins() []string
+
+	// GetRuntime returns the Runtime.
 	GetRuntime() Runtime
+
+	// GetPort returns the port that the function service is listening on.
 	GetPort() string
+
+	// GetError returns the error status of the function.
 	GetError() error
+
+	// GetHttpPattern returns the path of the server listening in Knative runtime mode.
 	GetHttpPattern() string
+
+	// SetSyncRequestMeta sets the native http.ResponseWriter and *http.Request when an http request is received.
 	SetSyncRequestMeta(w http.ResponseWriter, r *http.Request)
+
+	// SetEventMeta sets the name of the input source and the native event when an event request is received.
 	SetEventMeta(inputName string, event interface{})
+
+	// GetInputs returns the mapping relationship of *Input.
 	GetInputs() map[string]*Input
+
+	// GetOutputs returns the mapping relationship of *Output.
 	GetOutputs() map[string]*Output
+
+	// GetSyncRequestMeta returns the pointer of SyncRequestMetadata.
 	GetSyncRequestMeta() *SyncRequestMetadata
+
+	// GetBindingEventMeta returns the pointer of common.BindingEvent.
 	GetBindingEventMeta() *common.BindingEvent
+
+	// GetTopicEventMeta returns the pointer of common.TopicEvent.
 	GetTopicEventMeta() *common.TopicEvent
+
+	// GetCloudEventMeta returns the pointer of v2.Event.
 	GetCloudEventMeta() *cloudevents.Event
+
+	// WithOut adds the Out object to the RuntimeContext.
 	WithOut(out *Out) RuntimeContext
+
+	// WithError adds the error state to the RuntimeContext.
 	WithError(err error) RuntimeContext
+
+	// GetPodName returns the name of the pod the function is running on.
 	GetPodName() string
+
+	// GetPodNamespace returns the namespace of the pod the function is running on.
 	GetPodNamespace() string
+
+	// GetPluginsTracingCfg returns the TracingConfig interface.
 	GetPluginsTracingCfg() TracingConfig
 }
 
 type UserContext interface {
+
+	// Send provides the ability to allow the user to send data to a specified output target.
 	Send(outputName string, data []byte) ([]byte, error)
+
+	// ReturnOnSuccess returns the FunctionOut with a success state.
 	ReturnOnSuccess() FunctionOut
+
+	// ReturnOnInternalError returns the FunctionOut with an error state.
 	ReturnOnInternalError() FunctionOut
 }
 
 type FunctionOut interface {
+
+	// GetOut returns the pointer of raw Out object.
 	GetOut() *Out
+
+	// GetCode returns the return code in Out.
 	GetCode() int
+
+	// GetData returns the return data in Out.
 	GetData() []byte
+
+	// GetMetadata returns the metadata in Out.
 	GetMetadata() map[string]string
+
+	// WithCode sets the Out with new return code.
 	WithCode(code int) *Out
+
+	// WithData sets the Out with new return data.
 	WithData(data []byte) *Out
 }
 
 type TracingConfig interface {
+
+	// IsEnabled detects if the tracing configuration is enabled.
 	IsEnabled() bool
+
+	// ProviderName returns the name of tracing provider.
 	ProviderName() string
+
+	// ProviderOapServer returns the oap server of the tracing provider.
 	ProviderOapServer() string
+
+	// GetTags returns the tags of the tracing configuration.
 	GetTags() map[string]string
+
+	// GetBaggage returns the baggage of the tracing configuration.
 	GetBaggage() map[string]string
 }
 
