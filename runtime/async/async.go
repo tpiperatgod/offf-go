@@ -2,6 +2,7 @@ package async
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,7 +11,6 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	dapr "github.com/dapr/go-sdk/service/common"
 	daprd "github.com/dapr/go-sdk/service/grpc"
-	"github.com/pkg/errors"
 	"k8s.io/klog/v2"
 
 	ofctx "github.com/tpiperatgod/offf-go/context"
@@ -28,7 +28,7 @@ func NewAsyncRuntime(port string) (*Runtime, error) {
 	if testMode := os.Getenv(ofctx.TestModeEnvName); testMode == ofctx.TestModeOn {
 		handler, grpcHandler, err := NewFakeService(fmt.Sprintf(":%s", port))
 		if err != nil {
-			klog.Errorf("failed to create dapr grpc service: %v", err)
+			klog.Errorf("failed to create dapr grpc service: %v\n", err)
 			return nil, err
 		}
 		return &Runtime{
@@ -39,7 +39,7 @@ func NewAsyncRuntime(port string) (*Runtime, error) {
 	}
 	handler, err := daprd.NewService(fmt.Sprintf(":%s", port))
 	if err != nil {
-		klog.Errorf("failed to create dapr grpc service: %v", err)
+		klog.Errorf("failed to create dapr grpc service: %v\n", err)
 		return nil, err
 	}
 	return &Runtime{
@@ -90,12 +90,12 @@ func (r *Runtime) RegisterOpenFunction(
 		// Serving function with inputs
 		if ctx.HasInputs() {
 			for name, input := range ctx.GetInputs() {
-				switch input.Type {
+				switch input.GetType() {
 				case ofctx.OpenFuncBinding:
-					input.Uri = input.Component
+					input.Uri = input.ComponentName
 					funcErr = r.handler.AddBindingInvocationHandler(input.Uri, func(c context.Context, in *dapr.BindingEvent) (out []byte, err error) {
 						rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-						rm.FuncContext.SetEventMeta(name, in)
+						rm.FuncContext.SetEvent(name, in)
 						rm.FunctionRunWrapperWithHooks(fn)
 
 						switch rm.FuncOut.GetCode() {
@@ -107,14 +107,17 @@ func (r *Runtime) RegisterOpenFunction(
 							return nil, nil
 						}
 					})
+					if funcErr == nil {
+						klog.Infof("registered bindings handler: %s", input.Uri)
+					}
 				case ofctx.OpenFuncTopic:
 					sub := &dapr.Subscription{
-						PubsubName: input.Component,
+						PubsubName: input.ComponentName,
 						Topic:      input.Uri,
 					}
 					funcErr = r.handler.AddTopicEventHandler(sub, func(c context.Context, e *dapr.TopicEvent) (retry bool, err error) {
 						rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-						rm.FuncContext.SetEventMeta(name, e)
+						rm.FuncContext.SetEvent(name, e)
 						rm.FunctionRunWrapperWithHooks(fn)
 
 						switch rm.FuncOut.GetCode() {
@@ -136,8 +139,11 @@ func (r *Runtime) RegisterOpenFunction(
 							return false, nil
 						}
 					})
+					if funcErr == nil {
+						klog.Infof("registered pubsub handler: %s, %s", input.ComponentName, input.Uri)
+					}
 				default:
-					return fmt.Errorf("invalid input type: %s", input.Type)
+					return fmt.Errorf("invalid input type: %s", input.GetType())
 				}
 				if funcErr != nil {
 					// When the function throws an exception,

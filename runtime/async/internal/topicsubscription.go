@@ -1,3 +1,8 @@
+/*
+This file is derived from: https://github.com/dapr/go-sdk/blob/main/service/internal/topicsubscription.go
+and is referenced here for testing the dapr service.
+*/
+
 package internal
 
 import (

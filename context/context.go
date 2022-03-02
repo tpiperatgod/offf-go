@@ -7,18 +7,31 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"reflect"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
-	dapr "github.com/dapr/go-sdk/client"
 	"github.com/dapr/go-sdk/service/common"
 	"k8s.io/klog/v2"
+
+	dapr "github.com/dapr/go-sdk/client"
 )
 
 var (
-	clientGRPCPort string
+	clientGRPCPort         string
+	bindingQueueComponents = map[string]bool{
+		"bindings.kafka":                  true,
+		"bindings.rabbitmq":               true,
+		"bindings.aws.sqs":                true,
+		"bindings.aws.kinesis":            true,
+		"bindings.gcp.pubsub":             true,
+		"bindings.azure.eventgrid":        true,
+		"bindings.azure.eventhubs":        true,
+		"bindings.azure.servicebusqueues": true,
+		"bindings.azure.storagequeues":    true,
+	}
 )
 
 const (
@@ -40,21 +53,34 @@ const (
 	KubernetesMode                            = "kubernetes"
 	SelfHostMode                              = "self-host"
 	TestModeOn                                = "on"
+	innerEventTypePrefix                      = "io.openfunction.function"
 )
 
 type Runtime string
 type ResourceType string
 
+type NativeContext interface {
+	// GetNativeContext returns the Go native context object.
+	GetNativeContext() context.Context
+
+	// SetNativeContext set the Go native context object.
+	SetNativeContext(context.Context)
+}
+
 type RuntimeContext interface {
+	NativeContext
+
+	// GetName returns the function's name.
+	GetName() string
+
+	// GetMode returns the operating environment mode of the function.
+	GetMode() string
 
 	// GetContext returns the pointer of raw OpenFunction FunctionContext object.
 	GetContext() *FunctionContext
 
-	// GetNativeContext returns the Go native context object.
-	GetNativeContext() context.Context
-
 	// GetOut returns the pointer of raw OpenFunction FunctionOut object.
-	GetOut() *FunctionOut
+	GetOut() Out
 
 	// HasInputs detects if the function has any input sources.
 	HasInputs() bool
@@ -87,11 +113,11 @@ type RuntimeContext interface {
 	// GetHttpPattern returns the path of the server listening in Knative runtime mode.
 	GetHttpPattern() string
 
-	// SetSyncRequestMeta sets the native http.ResponseWriter and *http.Request when an http request is received.
-	SetSyncRequestMeta(w http.ResponseWriter, r *http.Request)
+	// SetSyncRequest sets the native http.ResponseWriter and *http.Request when an http request is received.
+	SetSyncRequest(w http.ResponseWriter, r *http.Request)
 
-	// SetEventMeta sets the name of the input source and the native event when an event request is received.
-	SetEventMeta(inputName string, event interface{})
+	// SetEvent sets the name of the input source and the native event when an event request is received.
+	SetEvent(inputName string, event interface{})
 
 	// GetInputs returns the mapping relationship of *Input.
 	GetInputs() map[string]*Input
@@ -99,17 +125,20 @@ type RuntimeContext interface {
 	// GetOutputs returns the mapping relationship of *Output.
 	GetOutputs() map[string]*Output
 
-	// GetSyncRequestMeta returns the pointer of SyncRequestMetadata.
-	GetSyncRequestMeta() *SyncRequestMetadata
+	// GetSyncRequest returns the pointer of SyncRequest.
+	GetSyncRequest() *SyncRequest
 
-	// GetBindingEventMeta returns the pointer of common.BindingEvent.
-	GetBindingEventMeta() *common.BindingEvent
+	// GetBindingEvent returns the pointer of common.BindingEvent.
+	GetBindingEvent() *common.BindingEvent
 
-	// GetTopicEventMeta returns the pointer of common.TopicEvent.
-	GetTopicEventMeta() *common.TopicEvent
+	// GetTopicEvent returns the pointer of common.TopicEvent.
+	GetTopicEvent() *common.TopicEvent
 
-	// GetCloudEventMeta returns the pointer of v2.Event.
-	GetCloudEventMeta() *cloudevents.Event
+	// GetCloudEvent returns the pointer of v2.Event.
+	GetCloudEvent() *cloudevents.Event
+
+	// GetInnerEvent returns the InnerEvent.
+	GetInnerEvent() InnerEvent
 
 	// WithOut adds the FunctionOut object to the RuntimeContext.
 	WithOut(out *FunctionOut) RuntimeContext
@@ -128,6 +157,7 @@ type RuntimeContext interface {
 }
 
 type Context interface {
+	NativeContext
 
 	// Send provides the ability to allow the user to send data to a specified output target.
 	Send(outputName string, data []byte) ([]byte, error)
@@ -137,6 +167,21 @@ type Context interface {
 
 	// ReturnOnInternalError returns the Out with an error state.
 	ReturnOnInternalError() Out
+
+	// GetSyncRequest returns the pointer of SyncRequest.
+	GetSyncRequest() *SyncRequest
+
+	// GetBindingEvent returns the pointer of common.BindingEvent.
+	GetBindingEvent() *common.BindingEvent
+
+	// GetTopicEvent returns the pointer of common.TopicEvent.
+	GetTopicEvent() *common.TopicEvent
+
+	// GetCloudEvent returns the pointer of v2.Event.
+	GetCloudEvent() *cloudevents.Event
+
+	// GetInnerEvent returns the InnerEvent.
+	GetInnerEvent() InnerEvent
 }
 
 type Out interface {
@@ -179,55 +224,73 @@ type TracingConfig interface {
 }
 
 type FunctionContext struct {
-	mu              sync.Mutex
-	Name            string               `json:"name"`
-	Version         string               `json:"version"`
-	RequestID       string               `json:"requestID,omitempty"`
-	Ctx             context.Context      `json:"ctx,omitempty"`
-	Inputs          map[string]*Input    `json:"inputs,omitempty"`
-	Outputs         map[string]*Output   `json:"outputs,omitempty"`
-	Runtime         Runtime              `json:"runtime"`
-	Port            string               `json:"port,omitempty"`
-	State           interface{}          `json:"state,omitempty"`
-	EventMeta       *EventMetadata       `json:"event,omitempty"`
-	SyncRequestMeta *SyncRequestMetadata `json:"syncRequest,omitempty"`
-	PrePlugins      []string             `json:"prePlugins,omitempty"`
-	PostPlugins     []string             `json:"postPlugins,omitempty"`
-	PluginsTracing  *PluginsTracing      `json:"pluginsTracing,omitempty"`
-	Out             *FunctionOut         `json:"out,omitempty"`
-	Error           error                `json:"error,omitempty"`
-	HttpPattern     string               `json:"httpPattern,omitempty"`
-	podName         string
-	podNamespace    string
-	daprClient      dapr.Client
-	mode            string
+	mu             sync.Mutex
+	Name           string             `json:"name"`
+	Version        string             `json:"version"`
+	RequestID      string             `json:"requestID,omitempty"`
+	Ctx            context.Context    `json:"ctx,omitempty"`
+	Inputs         map[string]*Input  `json:"inputs,omitempty"`
+	Outputs        map[string]*Output `json:"outputs,omitempty"`
+	Runtime        Runtime            `json:"runtime"`
+	Port           string             `json:"port,omitempty"`
+	State          interface{}        `json:"state,omitempty"`
+	Event          *EventRequest      `json:"event,omitempty"`
+	SyncRequest    *SyncRequest       `json:"syncRequest,omitempty"`
+	PrePlugins     []string           `json:"prePlugins,omitempty"`
+	PostPlugins    []string           `json:"postPlugins,omitempty"`
+	PluginsTracing *PluginsTracing    `json:"pluginsTracing,omitempty"`
+	Out            Out                `json:"out,omitempty"`
+	Error          error              `json:"error,omitempty"`
+	HttpPattern    string             `json:"httpPattern,omitempty"`
+	podName        string
+	podNamespace   string
+	daprClient     dapr.Client
+	mode           string
 }
 
-type EventMetadata struct {
+type EventRequest struct {
 	InputName    string               `json:"inputName,omitempty"`
 	BindingEvent *common.BindingEvent `json:"bindingEvent,omitempty"`
 	TopicEvent   *common.TopicEvent   `json:"topicEvent,omitempty"`
 	CloudEvent   *cloudevents.Event   `json:"cloudEventnt,omitempty"`
+	innerEvent   InnerEvent
 }
 
-type SyncRequestMetadata struct {
+type SyncRequest struct {
 	ResponseWriter http.ResponseWriter `json:"responseWriter,omitempty"`
 	Request        *http.Request       `json:"request,omitempty"`
 }
 
 type Input struct {
-	Uri       string            `json:"uri,omitempty"`
-	Component string            `json:"component,omitempty"`
-	Type      ResourceType      `json:"type"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
+	Uri           string            `json:"uri,omitempty"`
+	ComponentName string            `json:"componentName"`
+	ComponentType string            `json:"componentType"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+}
+
+// GetType will be called after the context has been parsed correctly,
+// therefore we do not have to handle the error return of getBuildingBlockType()
+func (i *Input) GetType() ResourceType {
+	bbt, err := getBuildingBlockType(i.ComponentType)
+	if err != nil {
+		klog.Warningf("failed to get component type: %v", err)
+	}
+	return bbt
 }
 
 type Output struct {
-	Uri       string            `json:"uri,omitempty"`
-	Component string            `json:"component,omitempty"`
-	Type      ResourceType      `json:"type"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	Operation string            `json:"operation,omitempty"`
+	Uri           string            `json:"uri,omitempty"`
+	ComponentName string            `json:"componentName"`
+	ComponentType string            `json:"componentType"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	Operation     string            `json:"operation,omitempty"`
+}
+
+// GetType will be called after the context has been parsed correctly,
+// therefore we do not have to handle the error return of getBuildingBlockType()
+func (o *Output) GetType() ResourceType {
+	bbt, _ := getBuildingBlockType(o.ComponentType)
+	return bbt
 }
 
 type FunctionOut struct {
@@ -280,13 +343,14 @@ func NewResponseWriterWrapper(w http.ResponseWriter, statusCode int) *ResponseWr
 }
 
 func (ctx *FunctionContext) Send(outputName string, data []byte) ([]byte, error) {
-	if ctx.HasOutputs() {
+	if !ctx.HasOutputs() {
 		return nil, errors.New("no output")
 	}
 
 	var err error
 	var output *Output
 	var response *dapr.BindingEvent
+	var payload []byte
 
 	if v, ok := ctx.Outputs[outputName]; ok {
 		output = v
@@ -294,14 +358,23 @@ func (ctx *FunctionContext) Send(outputName string, data []byte) ([]byte, error)
 		return nil, fmt.Errorf("output %s not found", outputName)
 	}
 
-	switch output.Type {
+	payload = data
+
+	if traceable(output.ComponentType) {
+		ie := NewInnerEvent(ctx)
+		ie.MergeMetadata(ctx.GetInnerEvent())
+		ie.SetUserData(data)
+		payload = ie.GetCloudEventJSON()
+	}
+
+	switch output.GetType() {
 	case OpenFuncTopic:
-		err = ctx.daprClient.PublishEvent(context.Background(), output.Component, output.Uri, data)
+		err = ctx.daprClient.PublishEvent(context.Background(), output.ComponentName, output.Uri, payload)
 	case OpenFuncBinding:
 		in := &dapr.InvokeBindingRequest{
-			Name:      output.Component,
+			Name:      output.ComponentName,
 			Operation: output.Operation,
-			Data:      data,
+			Data:      payload,
 			Metadata:  output.Metadata,
 		}
 		response, err = ctx.daprClient.InvokeBinding(context.Background(), in)
@@ -318,19 +391,17 @@ func (ctx *FunctionContext) Send(outputName string, data []byte) ([]byte, error)
 }
 
 func (ctx *FunctionContext) HasInputs() bool {
-	nilInputs := map[string]*Input{}
-	if reflect.DeepEqual(ctx.Inputs, nilInputs) {
-		return false
+	if len(ctx.GetInputs()) > 0 {
+		return true
 	}
-	return true
+	return false
 }
 
 func (ctx *FunctionContext) HasOutputs() bool {
-	nilOutputs := map[string]*Output{}
-	if reflect.DeepEqual(ctx.Outputs, nilOutputs) {
-		return false
+	if len(ctx.GetOutputs()) > 0 {
+		return true
 	}
-	return true
+	return false
 }
 
 func (ctx *FunctionContext) ReturnOnSuccess() Out {
@@ -351,13 +422,24 @@ func (ctx *FunctionContext) InitDaprClientIfNil() {
 	}
 
 	if ctx.daprClient == nil {
+		var err error
 		ctx.mu.Lock()
 		defer ctx.mu.Unlock()
-		c, e := dapr.NewClientWithPort(clientGRPCPort)
-		if e != nil {
-			panic(e)
+
+		for attempts := 120; attempts > 0; attempts-- {
+			c, e := dapr.NewClientWithPort(clientGRPCPort)
+			if e == nil {
+				ctx.daprClient = c
+				break
+			}
+			err = e
+			time.Sleep(500 * time.Millisecond)
 		}
-		ctx.daprClient = c
+
+		if ctx.daprClient == nil {
+			klog.Errorf("failed to init dapr client: %v", err)
+			panic(err)
+		}
 	}
 }
 
@@ -406,27 +488,48 @@ func (ctx *FunctionContext) GetNativeContext() context.Context {
 	return ctx.Ctx
 }
 
-func (ctx *FunctionContext) SetSyncRequestMeta(w http.ResponseWriter, r *http.Request) {
-	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
-	ctx.SyncRequestMeta.ResponseWriter = w
-	ctx.SyncRequestMeta.Request = r
+func (ctx *FunctionContext) SetNativeContext(c context.Context) {
+	ctx.Ctx = c
 }
 
-func (ctx *FunctionContext) SetEventMeta(inputName string, event interface{}) {
+func (ctx *FunctionContext) SetSyncRequest(w http.ResponseWriter, r *http.Request) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
+	ctx.SyncRequest.ResponseWriter = w
+	ctx.SyncRequest.Request = r
+}
+
+func (ctx *FunctionContext) SetEvent(inputName string, event interface{}) {
 	switch t := event.(type) {
 	case *common.BindingEvent:
-		ctx.EventMeta.BindingEvent = event.(*common.BindingEvent)
+		be := event.(*common.BindingEvent)
+		ie := convertEvent(ctx, inputName, be.Data)
+		ctx.setEvent(inputName, be, nil, nil, ie)
 	case *common.TopicEvent:
-		ctx.EventMeta.TopicEvent = event.(*common.TopicEvent)
+		te := event.(*common.TopicEvent)
+		ie := convertEvent(ctx, inputName, ConvertUserDataToBytes(te.Data))
+		ctx.setEvent(inputName, nil, te, nil, ie)
 	case *cloudevents.Event:
-		ctx.EventMeta.CloudEvent = event.(*cloudevents.Event)
+		ce := event.(*cloudevents.Event)
+		ie := convertEvent(ctx, inputName, ce.Data())
+		ctx.setEvent(inputName, nil, nil, ce, ie)
 	default:
-		klog.Error("failed to resolve event type: %v", t)
+		klog.Errorf("failed to resolve event type: %v", t)
 	}
-	ctx.EventMeta.InputName = inputName
+}
+
+func (ctx *FunctionContext) setEvent(name string, be *common.BindingEvent, te *common.TopicEvent, ce *cloudevents.Event, ie InnerEvent) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.Event.InputName = name
+	ctx.Event.BindingEvent = be
+	ctx.Event.TopicEvent = te
+	ctx.Event.CloudEvent = ce
+	ctx.Event.innerEvent = ie
+}
+
+func (ctx *FunctionContext) GetName() string {
+	return ctx.Name
 }
 
 func (ctx *FunctionContext) GetContext() *FunctionContext {
@@ -449,20 +552,24 @@ func (ctx *FunctionContext) GetPodNamespace() string {
 	return ctx.podNamespace
 }
 
-func (ctx *FunctionContext) GetSyncRequestMeta() *SyncRequestMetadata {
-	return ctx.SyncRequestMeta
+func (ctx *FunctionContext) GetSyncRequest() *SyncRequest {
+	return ctx.SyncRequest
 }
 
-func (ctx *FunctionContext) GetBindingEventMeta() *common.BindingEvent {
-	return ctx.EventMeta.BindingEvent
+func (ctx *FunctionContext) GetBindingEvent() *common.BindingEvent {
+	return ctx.Event.BindingEvent
 }
 
-func (ctx *FunctionContext) GetTopicEventMeta() *common.TopicEvent {
-	return ctx.EventMeta.TopicEvent
+func (ctx *FunctionContext) GetTopicEvent() *common.TopicEvent {
+	return ctx.Event.TopicEvent
 }
 
-func (ctx *FunctionContext) GetCloudEventMeta() *cloudevents.Event {
-	return ctx.EventMeta.CloudEvent
+func (ctx *FunctionContext) GetCloudEvent() *cloudevents.Event {
+	return ctx.Event.CloudEvent
+}
+
+func (ctx *FunctionContext) GetInnerEvent() InnerEvent {
+	return ctx.Event.innerEvent
 }
 
 func (ctx *FunctionContext) GetPluginsTracingCfg() TracingConfig {
@@ -483,7 +590,7 @@ func (ctx *FunctionContext) WithError(err error) RuntimeContext {
 	return ctx
 }
 
-func (ctx *FunctionContext) GetOut() *FunctionOut {
+func (ctx *FunctionContext) GetOut() Out {
 	return ctx.Out
 }
 
@@ -546,17 +653,18 @@ func (tracing *PluginsTracing) GetBaggage() map[string]string {
 }
 
 func registerTracingPluginIntoPrePlugins(plugins []string, target string) []string {
-	if plugins == nil {
-		plugins = []string{}
-	}
-	if exist := hasPlugin(plugins, target); !exist {
+	if len(plugins) == 0 {
+		plugins = append(plugins, target)
+	} else if exist := hasPlugin(plugins, target); !exist {
 		plugins = append(plugins, target)
 	}
 	return plugins
 }
 
 func registerTracingPluginIntoPostPlugins(plugins []string, target string) []string {
-	if exist := hasPlugin(plugins, target); !exist {
+	if len(plugins) == 0 {
+		plugins = append(plugins, target)
+	} else if exist := hasPlugin(plugins, target); !exist {
 		plugins = append(plugins[:1], plugins[:]...)
 		plugins[0] = target
 	}
@@ -603,27 +711,23 @@ func parseContext() (*FunctionContext, error) {
 		return nil, fmt.Errorf("invalid runtime: %s", ctx.Runtime)
 	}
 
-	ctx.EventMeta = &EventMetadata{}
-	ctx.SyncRequestMeta = &SyncRequestMetadata{}
+	ctx.Event = &EventRequest{}
+	ctx.SyncRequest = &SyncRequest{}
 
-	if !ctx.HasInputs() {
-		for name, in := range ctx.Inputs {
-			switch in.Type {
-			case OpenFuncBinding, OpenFuncTopic:
-				break
-			default:
-				return nil, fmt.Errorf("invalid input type %s: %s", name, in.Type)
+	if ctx.HasInputs() {
+		for name, in := range ctx.GetInputs() {
+			if _, err := getBuildingBlockType(in.ComponentType); err != nil {
+				klog.Errorf("failed to get building block type for input %s: %v", name, err)
+				return nil, err
 			}
 		}
 	}
 
-	if !ctx.HasOutputs() {
-		for name, out := range ctx.Outputs {
-			switch out.Type {
-			case OpenFuncBinding, OpenFuncTopic:
-				break
-			default:
-				return nil, fmt.Errorf("invalid output type %s: %s", name, out.Type)
+	if ctx.HasOutputs() {
+		for name, out := range ctx.GetOutputs() {
+			if _, err := getBuildingBlockType(out.ComponentType); err != nil {
+				klog.Errorf("failed to get building block type for output %s: %v", name, err)
+				return nil, err
 			}
 		}
 	}
@@ -694,4 +798,45 @@ func parseContext() (*FunctionContext, error) {
 
 func NewFunctionOut() *FunctionOut {
 	return &FunctionOut{}
+}
+
+// Convert queue binding event into cloud event format to add tracing metadata in the cloud event context.
+func traceable(t string) bool {
+
+	// All events sent to dapr pubsub components need to be encapsulated
+	if strings.HasPrefix(t, "pubsub") {
+		return true
+	}
+
+	// For dapr binding components, let the mapping conditions of the bindingQueueComponents
+	// determine if the tracing metadata can be added.
+	return bindingQueueComponents[t]
+}
+
+func getBuildingBlockType(componentType string) (ResourceType, error) {
+	typeSplit := strings.Split(componentType, ".")
+	if len(typeSplit) > 1 {
+		t := typeSplit[0]
+		switch ResourceType(t) {
+		case OpenFuncBinding, OpenFuncTopic:
+			return ResourceType(t), nil
+		default:
+			return "", fmt.Errorf("unknown component type: %s", t)
+		}
+	}
+	return "", errors.New("invalid component type")
+}
+
+func ConvertUserDataToBytes(data interface{}) []byte {
+	if d, ok := data.([]byte); ok {
+		return d
+	}
+	if d, ok := data.(string); ok {
+		return []byte(d)
+	}
+	if d, err := json.Marshal(data); err != nil {
+		return nil
+	} else {
+		return d
+	}
 }

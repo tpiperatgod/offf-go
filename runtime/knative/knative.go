@@ -59,7 +59,7 @@ func (r *Runtime) RegisterOpenFunction(
 	// Register the synchronous function (based on Knaitve runtime)
 	r.handler.HandleFunc(r.pattern, func(w http.ResponseWriter, r *http.Request) {
 		rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-		rm.FuncContext.SetSyncRequestMeta(w, r)
+		rm.FuncContext.SetSyncRequest(w, r)
 		defer RecoverPanicHTTP(w, "Function panic")
 		rm.FunctionRunWrapperWithHooks(fn)
 
@@ -75,7 +75,6 @@ func (r *Runtime) RegisterOpenFunction(
 			return
 		}
 	})
-	ctx.DestroyDaprClient()
 	return nil
 }
 
@@ -87,7 +86,7 @@ func (r *Runtime) RegisterHTTPFunction(
 ) error {
 	r.handler.HandleFunc(r.pattern, func(w http.ResponseWriter, r *http.Request) {
 		rm := runtime.NewRuntimeManager(ctx, prePlugins, postPlugins)
-		rm.FuncContext.SetSyncRequestMeta(w, r)
+		rm.FuncContext.SetSyncRequest(w, r)
 		defer RecoverPanicHTTP(w, "Function panic")
 		rm.FunctionRunWrapperWithHooks(fn)
 	})
@@ -109,7 +108,7 @@ func (r *Runtime) RegisterCloudEventFunction(
 
 	handleFn, err := cloudevents.NewHTTPReceiveHandler(ctx, p, func(ctx context.Context, ce cloudevents.Event) error {
 		rm := runtime.NewRuntimeManager(funcContext, prePlugins, postPlugins)
-		rm.FuncContext.SetEventMeta("", &ce)
+		rm.FuncContext.SetEvent("", &ce)
 		rm.FunctionRunWrapperWithHooks(fn)
 		return rm.FuncContext.GetError()
 	})

@@ -2,7 +2,7 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
+	"io/ioutil"
 	"net/http"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -62,6 +62,7 @@ func NewRuntimeManager(funcContext ofctx.RuntimeContext, prePlugin []plugin.Plug
 }
 
 func (rm *RuntimeManager) init() {
+	rm.FuncContext.SetNativeContext(context.Background())
 	rm.pluginState = map[string]plugin.Plugin{}
 
 	var newPrePlugins []plugin.Plugin
@@ -111,42 +112,43 @@ func (rm *RuntimeManager) FunctionRunWrapperWithHooks(fn interface{}) {
 	rm.ProcessPreHooks()
 
 	if function, ok := fn.(func(http.ResponseWriter, *http.Request)); ok {
-		srMeta := rm.FuncContext.GetSyncRequestMeta()
-		rww := ofctx.NewResponseWriterWrapper(srMeta.ResponseWriter, 200)
-		function(rww, srMeta.Request)
+
+		// get the sync request
+		sr := rm.FuncContext.GetSyncRequest()
+
+		// wrap the response writer
+		rww := ofctx.NewResponseWriterWrapper(sr.ResponseWriter, 200)
+
+		function(rww, sr.Request)
 		rm.FuncContext.WithOut(rm.FuncOut.WithCode(rww.Status()))
+
 	} else if function, ok := fn.(func(ofctx.Context, []byte) (ofctx.Out, error)); ok {
-		if rm.FuncContext.GetBindingEventMeta() != nil {
-			out, err := function(functionContext, rm.FuncContext.GetBindingEventMeta().Data)
+		if rm.FuncContext.GetBindingEvent() != nil || rm.FuncContext.GetTopicEvent() != nil {
+
+			// get the user data from inner event
+			userData := rm.FuncContext.GetInnerEvent().GetUserData()
+
+			// pass user data to user function
+			out, err := function(functionContext, userData)
+
 			rm.FuncContext.WithOut(out.GetOut())
 			rm.FuncContext.WithError(err)
-		} else if rm.FuncContext.GetTopicEventMeta() != nil {
-			out, err := function(functionContext, convertTopicEventToByte(rm.FuncContext.GetTopicEventMeta().Data))
+
+		} else if rm.FuncContext.GetSyncRequest().Request != nil {
+
+			body, _ := ioutil.ReadAll(rm.FuncContext.GetSyncRequest().Request.Body)
+			out, err := function(functionContext, body)
 			rm.FuncContext.WithOut(out.GetOut())
 			rm.FuncContext.WithError(err)
-		} else {
-			out, err := function(functionContext, nil)
-			rm.FuncContext.WithOut(out.GetOut())
-			rm.FuncContext.WithError(err)
+
 		}
 	} else if function, ok := fn.(func(context.Context, cloudevents.Event) error); ok {
 		ce := cloudevents.Event{}
-		if rm.FuncContext.GetCloudEventMeta() != nil {
-			ce = *rm.FuncContext.GetCloudEventMeta()
+		if rm.FuncContext.GetCloudEvent() != nil {
+			ce = *rm.FuncContext.GetCloudEvent()
 		}
 		rm.FuncContext.WithError(function(rm.FuncContext.GetNativeContext(), ce))
 	}
 
 	rm.ProcessPostHooks()
-}
-
-func convertTopicEventToByte(data interface{}) []byte {
-	if d, ok := data.([]byte); ok {
-		return d
-	}
-	if d, err := json.Marshal(data); err != nil {
-		return nil
-	} else {
-		return d
-	}
 }
